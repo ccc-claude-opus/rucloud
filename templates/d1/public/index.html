@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{name}}</title>
+<style>body{font:16px system-ui,sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem}li{margin:.3rem 0}.done{text-decoration:line-through;color:#888}</style>
+<h1>待辦清單</h1>
+<form id="f"><input name="text" placeholder="要做什麼？" autocomplete="off"> <button>新增</button></form>
+<ul id="list"></ul>
+<script>
+  const api = (p, o) => fetch(p, { headers: { 'content-type': 'application/json' }, ...o }).then((r) => r.json());
+  async function load() {
+    const todos = await api('/api/todos');
+    document.getElementById('list').innerHTML = '';
+    for (const t of todos) {
+      const li = document.createElement('li');
+      li.innerHTML = `<label><input type="checkbox" ${t.done ? 'checked' : ''}> <span class="${t.done ? 'done' : ''}"></span></label> <button>刪除</button>`;
+      li.querySelector('span').textContent = t.text;
+      li.querySelector('input').onchange = (e) => api(`/api/todos/${t.id}`, { method: 'PUT', body: JSON.stringify({ done: e.target.checked }) }).then(load);
+      li.querySelector('button').onclick = () => api(`/api/todos/${t.id}`, { method: 'DELETE' }).then(load);
+      document.getElementById('list').append(li);
+    }
+  }
+  document.getElementById('f').onsubmit = async (e) => {
+    e.preventDefault();
+    await api('/api/todos', { method: 'POST', body: JSON.stringify({ text: e.target.text.value }) });
+    e.target.reset();
+    load();
+  };
+  load();
+</script>

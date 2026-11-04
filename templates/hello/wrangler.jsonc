@@ -1,0 +1,8 @@
+// {{name}}：最小的 Worker + 靜態檔案
+{
+  "name": "{{name}}",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "run_worker_first": ["/api/*"] },
+  "vars": { "GREETING": "哈囉" }
+}

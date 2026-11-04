@@ -1,5 +1,15 @@
 # 更新紀錄
 
+## 1.2.0 — 開發體驗
+
+* **`rucloud init [資料夾] -t <範本>`**：從內建範本建立新專案（`rucloud init --list`）：
+  * `hello`：Worker + 靜態檔案（JavaScript）
+  * `typescript`：TypeScript Worker + KV，附 `tsconfig.json`、`package.json`（用真的 `tsc` 驗證過型別檢查會通過）
+  * `d1`：D1 待辦清單（API + migrations + 前端）
+  * `durable-object`：SQLite 型 Durable Object 的強一致計數器
+* **`rucloud types [應用資料夾]`**：依 wrangler 設定產生 `worker-configuration.d.ts` 的 `interface Env`（類似 `wrangler types`）。綁定用 @cloudflare/workers-types 的型別，Durable Object 會帶上 main 模組的類別（RPC 方法有型別）；`vars` 是字面量型別；`.dev.vars` 的密鑰名稱是 `string`（值不會寫出去）。
+* Worker 程序開啟 `--enable-source-maps`：自己打包、附 `.map` 的 JS，錯誤的 stack trace 會對回原始碼。TypeScript 檔案本來就是原始行號。
+
 ## 1.1.0 — 管理介面
 
 * 管理埠的 `/` 是一個網頁（單一檔案、不連外部 CDN，亮色 / 暗色、手機都能用）：

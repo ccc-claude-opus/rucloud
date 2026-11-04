@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{name}}</title>
+<h1>{{name}}</h1>
+<p id="msg">…</p>
+<script>
+  fetch('/api/hello?name=rucloud').then((r) => r.json()).then((d) => { document.getElementById('msg').textContent = d.message; });
+</script>

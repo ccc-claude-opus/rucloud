@@ -17,6 +17,7 @@ mod d1;
 mod deploy;
 mod durable;
 mod gateway;
+mod init;
 mod kv;
 mod observe;
 mod pool;
@@ -25,6 +26,7 @@ mod r2;
 mod s3;
 mod server;
 mod tls;
+mod types;
 mod vectorize;
 mod workflows;
 mod ws;
@@ -105,6 +107,33 @@ enum Cmd {
     Serve {
         #[arg(default_value = "rucloud.toml")]
         config: PathBuf,
+    },
+    /// 從範本建立新專案（rucloud init --list 看所有範本）
+    Init {
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// 範本：hello、typescript、d1、durable-object
+        #[arg(short, long, default_value = "hello")]
+        template: String,
+        /// 應用名稱（預設用資料夾名稱）
+        #[arg(long)]
+        name: Option<String>,
+        /// 資料夾不是空的也寫入
+        #[arg(long)]
+        force: bool,
+        /// 列出所有範本
+        #[arg(long)]
+        list: bool,
+    },
+    /// 依 wrangler 設定產生 Env 的 TypeScript 型別（worker-configuration.d.ts）
+    Types {
+        #[arg(default_value = ".")]
+        app: PathBuf,
+        #[arg(long)]
+        env: Option<String>,
+        /// 輸出檔（預設 <應用>/worker-configuration.d.ts）
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// 檢查設定（rucloud.toml 或應用資料夾），不啟動任何東西；有錯誤時以 1 結束
     Check {
@@ -320,6 +349,20 @@ async fn main() -> Result<()> {
             server::run(cfg, true).await
         }
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
+        Cmd::Init {
+            dir,
+            template,
+            name,
+            force,
+            list,
+        } => {
+            if list {
+                init::list();
+                return Ok(());
+            }
+            init::create(&dir, &template, name.as_deref(), force)
+        }
+        Cmd::Types { app, env, output } => types::run(&app, env.as_deref(), output.as_deref()),
         Cmd::Check { target } => {
             if !check::run(&target)? {
                 std::process::exit(1);

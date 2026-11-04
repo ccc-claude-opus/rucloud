@@ -6,7 +6,8 @@
 
 ```bash
 cargo install rucloud
-rucloud dev path/to/my-worker --d1-migrate     # 像 wrangler dev：http://localhost:8787
+rucloud init my-app -t d1                      # 從範本開始（rucloud init --list）
+rucloud dev my-app --d1-migrate                # 像 wrangler dev：http://localhost:8787
 rucloud check rucloud.toml                     # 啟動前檢查設定
 rucloud serve rucloud.toml                     # 一個程序跑多個應用（正式部署）
 rucloud deploy ./my-worker -m "新版本"          # 不停機部署到執行中的 rucloud
@@ -77,6 +78,8 @@ flowchart LR
 |---|---|
 | `rucloud dev [應用資料夾] --port 8787 [--bind 0.0.0.0] [--env 名稱] [--instances N] [--d1-migrate] [--d1-init DB=schema.sql] [--state .rucloud]` | 開發模式，程式碼改了自動重載 |
 | `rucloud serve [rucloud.toml]` | 依設定檔同時跑多個應用（正式部署） |
+| `rucloud init [資料夾] -t hello \| typescript \| d1 \| durable-object` | 從範本建立新專案 |
+| `rucloud types [應用資料夾]` | 產生 `Env` 的 TypeScript 型別（worker-configuration.d.ts） |
 | `rucloud check [rucloud.toml \| 應用資料夾]` | 檢查設定（打錯字、找不到的檔案、重複的埠、不支援的 wrangler 欄位） |
 | `rucloud d1 execute <應用資料夾> <資料庫> --file schema.sql \| --command "SELECT …"` | 對本機 D1 執行 SQL |
 | `rucloud d1 export <應用資料夾> <資料庫> -o dump.sql` | 匯出 D1 |

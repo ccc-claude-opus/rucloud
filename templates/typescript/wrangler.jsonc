@@ -1,0 +1,7 @@
+// {{name}}：TypeScript Worker（rucloud 直接跑 .ts，不用打包）
+{
+  "name": "{{name}}",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-11-01",
+  "kv_namespaces": [{ "binding": "KV", "id": "local" }]
+}

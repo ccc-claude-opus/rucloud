@@ -1,0 +1,14 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "rucloud dev",
+    "types": "rucloud types",
+    "check": "tsc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4",
+    "typescript": "^5"
+  }
+}

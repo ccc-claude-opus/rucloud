@@ -121,6 +121,8 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
             "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
             "--disable-warning=ExperimentalWarning",
             "--experimental-transform-types",
+            // 自己打包、附 .map 的 JS，錯誤的 stack trace 也能對回原始碼
+            "--enable-source-maps",
         ])
         .args(&spec.node_args)
         .arg(&spec.host_js)
