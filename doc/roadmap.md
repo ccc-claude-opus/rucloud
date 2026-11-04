@@ -12,16 +12,43 @@
 | 0.6.0 | wrangler 相容 | `wrangler.toml`、`--env` 多環境、模組規則（`import` 文字 / 資料 / wasm）、`rucloud kv` / `rucloud r2` 指令 | ✓ |
 | 0.7.0 | HTMLRewriter | `HTMLRewriter` 子集（選擇器、element/text/comments/document handler） | ✓ |
 
-## 之後可能做的
+## 還缺什麼（0.7.0 時的盤點）
 
-| 主題 | 內容 |
-|---|---|
-| 串流 HTMLRewriter | 邊讀邊改，降低大頁面的記憶體與延遲 |
-| Workflows | 持久化的多步驟工作（`step.do`、`step.sleep`），用 SQLite 記錄進度 |
-| Hyperdrive | 直接把連線字串交給 Worker（`env.HYPERDRIVE.connectionString`） |
-| 部署 API | 遠端上傳新版本、版本紀錄與 rollback |
-| Durable Object 逐出 | 閒置的物件從記憶體移除，關閉 SQLite 連線 |
+| 面向 | 缺口 | 影響 |
+|---|---|---|
+| **品質** | 沒有放進 repo 的整合測試：每版都是手動跑腳本驗證；沒有 CI | 改動容易壞掉舊功能而沒發現 |
+| **維運** | 只處理 Ctrl-C，沒有處理 SIGTERM，也沒有等進行中的請求做完（`docker stop` 會直接砍掉）；沒有 metrics；log 只印在 stdout，沒有 `tail` | 正式環境難以監控與排錯 |
+| **部署** | 沒有部署 API、版本紀錄、rollback；改 `wrangler.jsonc` 要整個重啟 | 每次更新都要登入主機 |
+| **網路** | 沒有內建 HTTPS（要自己架反向代理）；Worker 回應不會被快取；靜態檔案沒有壓縮 | 小型部署還要多架一層 |
+| **資源** | Durable Object 永遠留在記憶體、SQLite 連線不關；沒有備份指令 | 物件多了以後記憶體一直長 |
+| **執行環境** | Workflows、service binding 的 RPC 與具名 entrypoint、`connect()`、Worker 主動連出的 WebSocket、串流 HTMLRewriter | 部分 Cloudflare 專案跑不起來 |
+| **資料** | Hyperdrive、Analytics Engine、R2 事件通知（→ Queues）、D1 匯出 / 匯入、Queues 的 HTTP pull | 進階應用缺功能 |
+| **AI** | Workers AI 不支援串流與圖片 / 語音模型；Vectorize 是暴力搜尋；AI Gateway 沒有 fallback 鏈與儀表板 | 大規模 RAG 不適合 |
+| **規模** | 單機：所有狀態在一台機器的 SQLite | 無法水平擴充、沒有高可用 |
+
+## 接下來的版本
+
+依「先穩、再好維運、再補功能」排序。每版的內容做的時候可能再調整。
+
+| 版本 | 主題 | 內容 |
+|---|---|---|
+| 0.8.0 | 測試與 CI | `tests/` 整合測試（`cargo test` 起 rucloud、跑 examples 與各綁定、WebSocket、S3、沙箱）；GitHub Actions（fmt、clippy、test、Docker build） |
+| 0.9.0 | 維運 | SIGTERM 優雅關閉（停止收新請求、等進行中的請求、關掉 Worker 程序）；`/__rucloud/metrics`（Prometheus：請求數、延遲、Worker 重啟、綁定呼叫）；log 存檔與 `rucloud tail <應用>`；健康檢查端點 |
+| 0.10.0 | 部署 | 管理 API（token 驗證）：上傳新版本（tar）、版本列表、rollback、熱重載設定；`rucloud deploy` 指令；Durable Object 閒置逐出；`rucloud backup` / `restore`（SQLite 線上備份） |
+| 0.11.0 | 邊緣 | 自動 HTTPS（ACME / Let's Encrypt）；依 `Cache-Control` 快取 Worker 回應、`caches.default` 跨程序共用；靜態檔案 gzip / brotli |
+| 0.12.0 | 執行環境 | Workflows（`step.do` / `step.sleep` / `step.waitForEvent`，進度存 SQLite，可重試、可恢復）；service binding RPC 與具名 entrypoint；Worker 主動連出的 WebSocket（`fetch` + `Upgrade`） |
+| 0.13.0 | 資料 | Hyperdrive（`connectionString` 與連線參數）；Analytics Engine（`writeDataPoint` 存 SQLite，提供 SQL 查詢 API）；R2 事件通知送進 Queues；`rucloud d1 export / import`；Queues 的 HTTP pull consumer |
+| 0.14.0 | 串流與 socket | 串流 HTMLRewriter（邊讀邊改）；`connect()` TCP socket（`cloudflare:sockets`） |
+| 0.15.0 | AI | Workers AI 串流（SSE）與 embedding / 語音轉文字轉接；Vectorize 的 HNSW 索引；AI Gateway 的 fallback 鏈與簡單的 log 檢視頁面 |
+| 1.0.0 | 穩定 | 設定檔與 CLI 定案、相容性保證、完整文件；之後的破壞性變更走 semver |
+
+## 1.0 之後再考慮
+
+* **多台機器**：SQLite 複寫（例如 Litestream 或 LiteFS 的做法）、Durable Object 的跨機器路由。
+* **Containers**：Cloudflare Containers 的對應（rucloud 本來就在 Docker 裡，可以由 Worker 啟動容器）。
+* **Browser Rendering**：接本機的 Chromium（Puppeteer / Playwright 相容介面）。
+* **Images**：圖片縮放、轉檔（Rust 的影像函式庫）。
 
 ## 不打算做的
 
-全球複製、Analytics Engine、Browser Rendering、Images、Email Workers 等依賴 Cloudflare 網路或大型外部服務的產品。
+全球複製與 Anycast、Cloudflare 的 DDoS / WAF 網路、Email Routing 等依賴 Cloudflare 自家網路的產品。
