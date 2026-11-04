@@ -51,7 +51,7 @@
 | 1.1.0 ✓ | 管理介面 | 管理埠上的網頁：應用狀態、即時 log、版本與 rollback、快取清除、Analytics 查詢、佇列 | |
 | 1.2.0 ✓ | 開發體驗 | `rucloud init`（4 個範本）、`rucloud types`（產生 `Env` 型別）、`--enable-source-maps`（TypeScript 的行號本來就正確） |
 | 1.3.0 ✓ | 持續複寫 | SQLite 的變更持續送到 S3 / R2（類似 Litestream），機器壞了可以在另一台還原到幾秒前 | |
-| 1.4.0 | workerd 評估 | 評估用 Cloudflare 開源的 workerd 取代 Node 跑 Worker（真正的 isolate 隔離、CPU 限制）；可行就做成可選的執行環境 | |
+| 1.4.0 ✓ | workerd 評估 | 已評估，結論見 [workerd.md](workerd.md)：獨立版 workerd 沒有 CPU 限制、也不是 hardened sandbox，暫不做成執行環境 |
 
 ## 之後再考慮
 
