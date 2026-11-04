@@ -1,5 +1,13 @@
 # 更新紀錄
 
+## 0.5.0 — 沙箱與資源限制
+
+* **安全修正**：每個應用改用自己的綁定 token。之前所有應用共用一把，A 應用的 Worker 可以存取 B 應用的 D1、KV 等資料。
+* **安全修正**：Worker 程序不再繼承 rucloud 的環境變數（只留 `PATH`、`HOME`、`LANG`、`TZ` 等），`RUCLOUD_SPEC`（含 token）讀完就從 `process.env` 刪掉。
+* 預設開啟 Node 權限模型（`--permission`）：只能讀應用資料夾與 rucloud 執行環境，只能寫 SQLite 型 Durable Object 的資料夾，不能開子程序、worker threads、原生 addon。`sandbox = false` 或 `rucloud dev --no-sandbox` 關掉；`allow_read` / `allow_write` 加開路徑。
+* 看門狗：每秒 ping 一次 Worker 程序，事件迴圈卡住超過 `max_block_ms`（預設 30 秒）就強制重開，無窮迴圈不會讓應用永遠沒有回應。
+* `memory_mb`：每個 Worker 程序的 JS heap 上限，超過時程序結束並自動重開。
+
 ## 0.4.0 — R2 的 S3 相容 API 與 multipart upload
 
 * 新的 S3 相容端點（`rucloud.toml` 的 `[s3]`，或 `rucloud dev --s3-port`）：aws-cli、rclone、boto3 等工具可以直接存取 R2 bucket。

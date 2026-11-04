@@ -21,7 +21,6 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 pub struct Hub {
     pub apps: HashMap<String, Arc<App>>,
     pub queues: Arc<Queues>,
-    pub token: String,
 }
 
 type S = State<Arc<Hub>>;
@@ -84,7 +83,10 @@ pub fn router(hub: Arc<Hub>) -> Router {
 }
 
 async fn auth(State(hub): S, req: Request, next: Next) -> Response {
-    if req.headers().get("x-rucloud-token").is_none_or(|t| t.as_bytes() != hub.token.as_bytes()) {
+    // 路徑是 /b/<應用>/…，token 必須是那個應用的
+    let app = req.uri().path().strip_prefix("/b/").and_then(|p| p.split('/').next()).map(|a| urlencoding::decode(a).map(|s| s.into_owned()).unwrap_or_default());
+    let expected = app.and_then(|a| hub.apps.get(&a).map(|a| a.token.clone()));
+    if expected.is_none_or(|t| req.headers().get("x-rucloud-token").is_none_or(|h| h.as_bytes() != t.as_bytes())) {
         return ApiError(StatusCode::FORBIDDEN, "token 不對".into()).into_response();
     }
     next.run(req).await
@@ -353,7 +355,7 @@ async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String
     *req.uri_mut() = "/__rucloud/do".parse().unwrap();
     let extra = [
         ("x-rucloud-kind", "do".to_string()),
-        ("x-rucloud-token", hub.token.clone()),
+        ("x-rucloud-token", app.token.clone()),
         ("x-rucloud-do-ns", ns),
         ("x-rucloud-do-op", op),
         ("x-rucloud-do-url", do_url),

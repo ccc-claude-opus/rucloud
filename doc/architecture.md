@@ -58,7 +58,21 @@ sequenceDiagram
 | 靜態檔案在 Rust | 前端檔案是流量大宗，完全不進 JS |
 | 程序間用 HTTP（loopback + keep-alive） | 簡單、可串流（R2 上傳下載、DO fetch 都不經過記憶體緩衝） |
 
-## 4. Durable Objects 的單一實例
+## 4. 隔離與資源限制
+
+Cloudflare 用 V8 isolate 隔離每個 Worker；rucloud 用一般的 Node 程序，所以靠下面幾層防護：
+
+| 層 | 做法 |
+|---|---|
+| 檔案系統、子程序 | Node 權限模型（`--permission`）：只能讀應用資料夾與 `<state>/runtime`，只能寫 `<state>/<應用>/do-sqlite`；不能開子程序、worker threads、原生 addon |
+| 環境變數 | 啟動 Worker 程序時清空環境，只留 `PATH`、`HOME`、`LANG`、`TZ` 等；設定（含 token）讀完就從 `process.env` 刪掉 |
+| 資料 | 每個應用一把綁定 token，綁定 API 檢查路徑裡的應用名稱和 token 是否相符 |
+| CPU | 看門狗每秒 ping 一次，事件迴圈卡住超過 `max_block_ms` 就砍掉重開 |
+| 記憶體 | `memory_mb` → `--max-old-space-size` |
+
+還沒擋的：對外網路（Node 24 的權限模型不管網路；Worker 本來就要能 `fetch`），以及同一應用多個請求共用一個程序（彼此看得到模組層級的變數，Cloudflare 的同一個 isolate 也是這樣）。**不要在同一個 rucloud 跑互不信任的人寫的應用**；需要更強的隔離時，每個應用各開一個容器。
+
+## 5. Durable Objects 的單一實例
 
 ```mermaid
 flowchart LR
@@ -73,13 +87,13 @@ flowchart LR
 * 擁有者程序裡，同一個物件的事件用 promise 鏈依序執行（近似 Cloudflare 的 input gate），所以讀-改-寫不會被插隊；實測 3 個程序、50 個並行請求，計數器結果完全正確。
 * `ctx.storage` 在擁有者程序裡有記憶體快取（寫入直達 SQLite）。
 
-## 5. 佇列與排程
+## 6. 佇列與排程
 
 * Queues 是全域的（`<state>/queues.sqlite`）：A 應用送、B 應用收都可以。
 * 消費者依 `max_batch_size`、`max_batch_timeout` 分批；`message.retry()` 或 handler 丟例外會重送，超過 `max_retries` 移到 `dead_letter_queue` 或丟棄。取出的訊息有 5 分鐘租約，程序當掉也不會遺失。
 * Cron 用 UTC，5 個欄位（同 Cloudflare）。
 
-## 6. 資料存放
+## 7. 資料存放
 
 ```
 <state>/

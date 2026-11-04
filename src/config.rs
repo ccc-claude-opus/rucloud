@@ -227,6 +227,19 @@ pub struct AppEntry {
     pub d1_init: BTreeMap<String, PathBuf>,
     #[serde(default)]
     pub watch: bool,
+    /// Node 權限模型：只能讀應用資料夾、不能開子程序（預設開啟）
+    #[serde(default = "yes")]
+    pub sandbox: bool,
+    /// 沙箱額外允許讀取的路徑（例如 monorepo 上層的 node_modules）
+    #[serde(default)]
+    pub allow_read: Vec<PathBuf>,
+    /// 沙箱額外允許寫入的路徑
+    #[serde(default)]
+    pub allow_write: Vec<PathBuf>,
+    /// 每個 Worker 程序的 JS heap 上限（MB）
+    pub memory_mb: Option<u32>,
+    /// 事件迴圈卡住超過幾毫秒就重開程序；0 = 不檢查。預設 30000
+    pub max_block_ms: Option<u64>,
 }
 
 fn default_state() -> PathBuf {
@@ -240,6 +253,9 @@ fn default_bind() -> String {
 }
 fn one() -> usize {
     1
+}
+fn yes() -> bool {
+    true
 }
 
 pub fn load_serve_config(path: &Path) -> Result<ServeConfig> {
@@ -258,6 +274,11 @@ pub fn load_serve_config(path: &Path) -> Result<ServeConfig> {
             && f.is_relative()
         {
             app.env_file = Some(base.join(f));
+        }
+        for p in app.allow_read.iter_mut().chain(app.allow_write.iter_mut()) {
+            if p.is_relative() {
+                *p = base.join(&*p);
+            }
         }
     }
     Ok(cfg)

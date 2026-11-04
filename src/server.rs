@@ -32,7 +32,6 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     std::fs::create_dir_all(&cfg.state_dir)?;
     let state_root = cfg.state_dir.canonicalize()?;
     let host_js = write_runtime(&state_root)?;
-    let token = format!("{:032x}", rand::random::<u128>());
 
     let bind_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let bindings_url = format!("http://{}", bind_listener.local_addr()?);
@@ -43,7 +42,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         .tcp_nodelay(true)
         .build()?;
 
-    let ctx = Ctx { state_root: &state_root, node: &cfg.node, host_js: &host_js, bindings_url: &bindings_url, token: &token, http, dev };
+    let ctx = Ctx { state_root: &state_root, node: &cfg.node, host_js: &host_js, bindings_url: &bindings_url, http, dev };
     let mut apps: Vec<(Arc<App>, &crate::config::AppEntry)> = Vec::new();
     for entry in &cfg.apps {
         let app = App::load(entry, &ctx)?;
@@ -57,7 +56,6 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     let hub = Arc::new(Hub {
         apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
         queues: queues.clone(),
-        token: token.clone(),
     });
     tokio::spawn(async move { axum::serve(bind_listener, bindings::router(hub)).await });
 

@@ -17,6 +17,9 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 const spec = JSON.parse(process.env.RUCLOUD_SPEC);
+// token 只留在這個模組裡，Worker 程式碼從 process.env 拿不到
+delete process.env.RUCLOUD_SPEC;
+delete process.env.RUCLOUD_INSTANCE;
 const B = spec.bindingsUrl;
 const AUTH = { 'x-rucloud-token': spec.token };
 const nativeFetch = globalThis.fetch;
@@ -1224,6 +1227,7 @@ async function handleFetch(req, res) {
 
 async function handleInternal(kind, req, res) {
   if (req.headers['x-rucloud-token'] !== spec.token) return sendJson(res, 403, { error: 'forbidden' });
+  if (kind === 'ping') return sendJson(res, 200, { ok: true });
   try {
     if (kind === 'queue') {
       const payload = JSON.parse(await readBody(req));

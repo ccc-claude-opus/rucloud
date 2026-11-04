@@ -58,6 +58,15 @@ enum Cmd {
         no_watch: bool,
         #[arg(long, default_value = "node")]
         node: String,
+        /// 關掉 Node 權限模型沙箱（Worker 可以讀寫任何檔案、開子程序）
+        #[arg(long)]
+        no_sandbox: bool,
+        /// 每個 Worker 程序的 JS heap 上限（MB）
+        #[arg(long)]
+        memory_mb: Option<u32>,
+        /// 事件迴圈卡住超過幾毫秒就重開程序（0 = 不檢查）
+        #[arg(long, default_value_t = 30_000)]
+        max_block_ms: u64,
         /// 開 R2 的 S3 相容 API（金鑰取自 RUCLOUD_S3_ACCESS_KEY_ID / RUCLOUD_S3_SECRET_ACCESS_KEY）
         #[arg(long)]
         s3_port: Option<u16>,
@@ -108,7 +117,7 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
     match Cli::parse().cmd {
-        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port } => {
+        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port, no_sandbox, memory_mb, max_block_ms } => {
             let s3 = match s3_port {
                 Some(port) => Some(s3::S3Cfg {
                     port,
@@ -139,6 +148,11 @@ async fn main() -> Result<()> {
                     env_file: None,
                     d1_init: init,
                     watch: !no_watch,
+                    sandbox: !no_sandbox,
+                    allow_read: vec![],
+                    allow_write: vec![],
+                    memory_mb,
+                    max_block_ms: Some(max_block_ms),
                 }],
             };
             server::run(cfg, true).await

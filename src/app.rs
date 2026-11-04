@@ -41,7 +41,6 @@ pub struct Ctx<'a> {
     pub node: &'a str,
     pub host_js: &'a Path,
     pub bindings_url: &'a str,
-    pub token: &'a str,
     pub http: reqwest::Client,
     pub dev: bool,
 }
@@ -56,7 +55,9 @@ impl App {
             .or_else(|| cfg.name.clone())
             .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned());
         let state = ctx.state_root.join(&name);
-        std::fs::create_dir_all(&state)?;
+        std::fs::create_dir_all(state.join("do-sqlite"))?;
+        // 每個應用一把自己的 token：Worker 只能用它存取自己的綁定
+        let token = format!("{:032x}", rand::random::<u128>());
 
         let mut d1 = HashMap::new();
         for db in &cfg.d1_databases {
@@ -87,7 +88,7 @@ impl App {
             "app": name,
             "main": cfg.main.as_ref().map(|m| dir.join(m)),
             "bindingsUrl": format!("{}/b/{}", ctx.bindings_url, urlencoding::encode(&name)),
-            "token": ctx.token,
+            "token": token,
             "vars": vars,
             "d1": cfg.d1_databases.iter().map(|d| &d.binding).collect::<Vec<_>>(),
             "kv": cfg.kv_namespaces.iter().map(|k| &k.binding).collect::<Vec<_>>(),
@@ -103,6 +104,26 @@ impl App {
             "sqliteClasses": cfg.migrations.iter().flat_map(|m| m.new_sqlite_classes.iter()).collect::<Vec<_>>(),
             "doSqliteDir": state.join("do-sqlite"),
         });
+        let mut node_args = Vec::new();
+        if entry.sandbox {
+            // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
+            let runtime_dir = ctx.host_js.parent().unwrap_or(ctx.host_js);
+            node_args.push("--permission".to_string());
+            for p in [dir.as_path(), runtime_dir].into_iter().chain(entry.allow_read.iter().map(|p| p.as_path())) {
+                node_args.push(format!("--allow-fs-read={}", p.display()));
+            }
+            for p in std::iter::once(state.join("do-sqlite")).chain(entry.allow_write.iter().cloned()) {
+                node_args.push(format!("--allow-fs-read={}", p.display()));
+                node_args.push(format!("--allow-fs-write={}", p.display()));
+            }
+        }
+        if let Some(mb) = entry.memory_mb {
+            node_args.push(format!("--max-old-space-size={mb}"));
+        }
+        let max_block = match entry.max_block_ms.unwrap_or(30_000) {
+            0 => None,
+            ms => Some(std::time::Duration::from_millis(ms)),
+        };
         let pool = cfg.main.as_ref().map(|_| {
             Pool::start(
                 WorkerSpec {
@@ -111,6 +132,10 @@ impl App {
                     host_js: ctx.host_js.to_path_buf(),
                     cwd: dir.clone(),
                     spec_json: spec.to_string(),
+                    node_args,
+                    max_block,
+                    http: ctx.http.clone(),
+                    token: token.clone(),
                 },
                 entry.instances,
             )
@@ -133,7 +158,7 @@ impl App {
             state,
             dev: ctx.dev,
             http: ctx.http.clone(),
-            token: ctx.token.to_string(),
+            token,
         }))
     }
 

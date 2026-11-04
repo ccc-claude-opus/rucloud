@@ -16,7 +16,16 @@ pub struct WorkerSpec {
     pub host_js: PathBuf,
     pub cwd: PathBuf,
     pub spec_json: String,
+    /// 沙箱、記憶體上限等額外的 node 參數
+    pub node_args: Vec<String>,
+    /// 事件迴圈卡住超過這麼久就砍掉程序重開（無窮迴圈保護）
+    pub max_block: Option<Duration>,
+    pub http: reqwest::Client,
+    pub token: String,
 }
+
+/// Worker 程序只拿到這些環境變數；rucloud 自己的環境（金鑰等）不會漏進去
+const PASS_ENV: &[&str] = &["PATH", "HOME", "LANG", "LC_ALL", "TZ", "NODE_ENV", "SYSTEMROOT", "TMPDIR"];
 
 pub struct Pool {
     slots: Vec<AtomicU16>,
@@ -82,13 +91,18 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
     let mut backoff = Duration::from_millis(200);
     loop {
         let started = Instant::now();
-        let child = Command::new(&spec.node)
-            .args([
-                "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
-                "--disable-warning=ExperimentalWarning",
-            ])
+        let mut cmd = Command::new(&spec.node);
+        cmd.args(["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--disable-warning=ExperimentalWarning"])
+            .args(&spec.node_args)
             .arg(&spec.host_js)
             .current_dir(&spec.cwd)
+            .env_clear();
+        for k in PASS_ENV {
+            if let Ok(v) = std::env::var(k) {
+                cmd.env(k, v);
+            }
+        }
+        let child = cmd
             .env("RUCLOUD_SPEC", &spec.spec_json)
             .env("RUCLOUD_INSTANCE", i.to_string())
             .stdin(std::process::Stdio::piped())
@@ -134,6 +148,11 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
                 tracing::warn!("[{tag}] Worker 程序結束（{}），重新啟動", st.map(|s| s.to_string()).unwrap_or_default());
                 false
             }
+            limit = watchdog(&pool, &spec, i) => {
+                tracing::error!("[{tag}] Worker 程序超過 {:.0} 秒沒有回應（可能是無窮迴圈），強制重開", limit.as_secs_f64());
+                let _ = child.kill().await;
+                false
+            }
             _ = restart.changed() => {
                 tracing::info!("[{tag}] 程式碼有變動，重新載入");
                 let _ = child.kill().await;
@@ -149,6 +168,28 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
         }
         if !restarted {
             tokio::time::sleep(backoff).await;
+        }
+    }
+}
+
+/// 每秒對 Worker 程序送一次 ping；一次 ping 等超過 max_block 就回傳（呼叫端會砍掉程序）
+async fn watchdog(pool: &Pool, spec: &WorkerSpec, i: usize) -> Duration {
+    let Some(limit) = spec.max_block else { return std::future::pending().await };
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let port = pool.slots[i].load(Ordering::Acquire);
+        if port == 0 {
+            continue;
+        }
+        let ping = spec
+            .http
+            .get(format!("http://127.0.0.1:{port}/__rucloud/ping"))
+            .header("x-rucloud-kind", "ping")
+            .header("x-rucloud-token", &spec.token)
+            .send();
+        match tokio::time::timeout(limit, ping).await {
+            Ok(_) => {}
+            Err(_) => return limit,
         }
     }
 }

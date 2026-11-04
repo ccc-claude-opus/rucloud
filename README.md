@@ -35,6 +35,7 @@ flowchart LR
 * 靜態檔案完全不經過 JS：Rust 直接回應（約 9.6 萬 req/s）。
 * Worker 程式碼用 Node 跑，`fetch`、`Request`、`Response`、`ReadableStream`、`crypto.subtle` 都是原生的；串流（SSE）一路穿透。
 * 所有狀態都在 Rust 這邊（SQLite），所以 Worker 程序可以開很多個、掛了自動重開，資料一致。
+* Worker 程序跑在 Node 權限模型的沙箱裡（只能讀自己的資料夾、不能開子程序），每個應用有自己的綁定 token；卡住或記憶體爆掉會自動重開。
 * Durable Object 依 id 固定交給同一個程序，保證單一實例；同一物件的事件依序處理。
 
 詳細設計見 [doc/architecture.md](doc/architecture.md)。

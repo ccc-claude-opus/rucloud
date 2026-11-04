@@ -53,6 +53,11 @@ instances = 4                    # Worker 程序數，建議 ≈ CPU 核心數
 env_file = "/etc/rucloud/myshop.env"   # 密鑰，會蓋過 .dev.vars
 d1_init = { DB = "schema.sql" }
 watch = false
+sandbox = true                   # Node 權限模型（預設開）
+allow_read = []                  # 沙箱額外可讀的路徑，例如 monorepo 上層的 node_modules
+allow_write = []
+memory_mb = 256                  # 每個 Worker 程序的 JS heap 上限
+max_block_ms = 30000             # 事件迴圈卡住多久就重開程序（0 = 不檢查）
 ```
 
 TLS 建議交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）。rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。

@@ -14,7 +14,9 @@
 | `cloudflare:workers` | `DurableObject`、`WorkerEntrypoint`、`WorkflowEntrypoint`、`RpcTarget`、`env`、`waitUntil` |
 | `node:*` 模組 | 都能用（等同永遠開著 `nodejs_compat`） |
 | TypeScript `main` | Node 24 的型別剝除（只支援可直接剝除的語法） |
-| CPU 時間限制 | 沒有 |
+| CPU 時間限制 | 沒有逐請求的 CPU 計時；事件迴圈卡住超過 `max_block_ms`（預設 30 秒）會重開程序 |
+| `process.env` | 只有 `PATH`、`HOME` 等基本變數；請用 `env` 取得設定與密鑰 |
+| 檔案系統 | 預設只能讀應用資料夾、不能寫（Node 權限模型） |
 | `WebSocketPair`、101 回應 | ✓（見下方 WebSocket 一節） |
 | `HTMLRewriter`、`connect()` | 不支援 |
 
