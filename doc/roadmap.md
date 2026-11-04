@@ -42,12 +42,23 @@
 | 0.15.0 ✓ | AI | Workers AI 串流（SSE）；AI Gateway 的 Universal endpoint（fallback）；Vectorize 精確搜尋改成多執行緒 + heap（約 4 倍快）。HNSW 等近似索引延後：精確搜尋在 10 萬筆內已經夠快，近似索引會讓結果不再精確 |
 | 1.0.0 ✓ | 穩定 | 設定檔嚴格檢查、`rucloud check`、資料夾格式版本、相容性承諾（doc/stability.md） |
 
-## 1.0 之後再考慮
+## 1.x
 
-* **多台機器**：SQLite 複寫（例如 Litestream 或 LiteFS 的做法）、Durable Object 的跨機器路由。
+1.0 之後只加功能、不破壞相容性（見 [stability.md](stability.md)）。
+
+| 版本 | 主題 | 內容 | 狀態 |
+|---|---|---|---|
+| 1.1.0 | 管理介面 | 管理埠上的網頁：應用狀態、即時 log、版本與 rollback、快取清除、Analytics 查詢、佇列 | |
+| 1.2.0 | 開發體驗 | `rucloud init`（範本）、Worker 錯誤的 stack trace 對應回 TypeScript 原始碼行號、`rucloud types`（產生 `env` 的 TypeScript 型別） | |
+| 1.3.0 | 持續複寫 | SQLite 的變更持續送到 S3 / R2（類似 Litestream），機器壞了可以在另一台還原到幾秒前 | |
+| 1.4.0 | workerd 評估 | 評估用 Cloudflare 開源的 workerd 取代 Node 跑 Worker（真正的 isolate 隔離、CPU 限制）；可行就做成可選的執行環境 | |
+
+## 之後再考慮
+
+* **多台機器**：多台共用狀態、Durable Object 的跨機器路由。
 * **Containers**：Cloudflare Containers 的對應（rucloud 本來就在 Docker 裡，可以由 Worker 啟動容器）。
 * **Browser Rendering**：接本機的 Chromium（Puppeteer / Playwright 相容介面）。
-* **Images**：圖片縮放、轉檔（Rust 的影像函式庫）。
+* **Images**：圖片縮放、轉檔。
 
 ## 不打算做的
 
