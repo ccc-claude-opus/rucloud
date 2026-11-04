@@ -100,6 +100,8 @@ impl App {
             "ai": cfg.ai.as_ref().map(|a| &a.binding),
             "assets": cfg.assets.as_ref().and_then(|a| a.binding.clone()),
             "compatibilityDate": cfg.compatibility_date,
+            "sqliteClasses": cfg.migrations.iter().flat_map(|m| m.new_sqlite_classes.iter()).collect::<Vec<_>>(),
+            "doSqliteDir": state.join("do-sqlite"),
         });
         let pool = cfg.main.as_ref().map(|_| {
             Pool::start(

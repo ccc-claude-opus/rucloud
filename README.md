@@ -52,7 +52,7 @@ flowchart LR
 | R2（`get/put/head/delete/list`、range、metadata、delimiter） | `r2_buckets` | ✓（無 multipart） |
 | Queues（producer + consumer、批次、retry、delay、DLQ，跨應用） | `queues` | ✓ |
 | Cron Triggers | `triggers.crons` | ✓（開發模式可 `GET /__scheduled?cron=...`） |
-| Durable Objects（`fetch`、RPC 方法、`ctx.storage`、`blockConcurrencyWhile`、alarm、WebSocket hibernation） | `durable_objects` | ✓（無 SQL storage） |
+| Durable Objects（`fetch`、RPC 方法、`ctx.storage`、`blockConcurrencyWhile`、alarm、WebSocket hibernation、`ctx.storage.sql`） | `durable_objects`、`migrations` | ✓ |
 | Vectorize（`upsert/insert/query/getByIds/deleteByIds`、metadata 過濾） | `vectorize` | ✓ 暴力搜尋 |
 | Rate Limiting binding | `ratelimits` | ✓ |
 | Service bindings（`env.OTHER.fetch`） | `services` | ✓ |
@@ -92,7 +92,7 @@ flowchart LR
 |---|---|---|
 | [examples/showcase](examples/showcase) | 所有綁定一次示範（R2、Queues、Cron、DO、Vectorize、限流、service binding） | <http://localhost:8710> |
 | [examples/hello](examples/hello) | 最小 Worker，給 showcase 的 service binding 呼叫 | <http://hello.localhost:8700> |
-| [examples/chat](examples/chat) | WebSocket 聊天室：每個房間一個 Durable Object（hibernation API） | <http://localhost:8713> |
+| [examples/chat](examples/chat) | WebSocket 聊天室：每個房間一個 SQLite 型 Durable Object（hibernation API + `ctx.storage.sql`） | <http://localhost:8713> |
 | [examples/myshop](examples/myshop) | 個人商店 POS：D1、HMAC cookie、PBKDF2（取自 test-apps） | <http://localhost:8711> |
 | [examples/friendbook](examples/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
 

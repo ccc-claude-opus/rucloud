@@ -90,7 +90,8 @@ flowchart LR
     d1/<database_name>.sqlite   D1
     kv.sqlite                   KV（所有 namespace）
     r2/r2.sqlite, r2/objects/   R2
-    durable.sqlite              DO storage + alarm
+    durable.sqlite              DO storage（KV 型）+ alarm
+    do-sqlite/<binding>/<id>.sqlite   SQLite 型 DO，每個物件一個檔
     vectorize.sqlite            Vectorize
 ```
 

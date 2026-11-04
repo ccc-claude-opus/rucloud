@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 0.3.0 — SQLite 型 Durable Objects
+
+* `migrations[].new_sqlite_classes` 宣告的類別改用 SQLite 儲存：每個物件一個資料庫檔（`<state>/<應用>/do-sqlite/<binding>/<id>.sqlite`），由擁有它的 Worker 程序用 Node 內建的 `node:sqlite` 直接開啟。
+* `ctx.storage.sql.exec(query, ...bindings)`：同步、可多句（正確處理字串裡的分號與 `CREATE TRIGGER … END;`）；cursor 支援迭代、`toArray()`、`one()`、`raw()`、`columnNames`、`rowsRead`、`rowsWritten`；`sql.databaseSize`。
+* 同步 KV API `ctx.storage.kv.get/put/delete/list`；非同步 KV API 也存進同一個資料庫的 `_cf_KV` 表。
+* `transactionSync(fn)`、`transaction(fn)`（含 `txn.rollback()`）用 SAVEPOINT 實作；`deleteAll()` 連 SQL 表一起清掉。
+* 一般（KV 型）的 Durable Object 存取 `ctx.storage.sql` 時，會丟出和 Cloudflare 一樣的錯誤。
+* `examples/chat` 改成 SQLite 型：聊天紀錄存進每個房間自己的資料庫，加入時先收到最近 20 則。
+
 ## 0.2.0 — WebSocket
 
 * 閘道支援 HTTP upgrade：對 Worker 程序用原始 TCP 轉發，101 之後兩邊直接對接，不解讀訊框。

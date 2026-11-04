@@ -13,6 +13,8 @@ import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
 import { pathToFileURL } from 'node:url';
+import { mkdirSync, rmSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 const spec = JSON.parse(process.env.RUCLOUD_SPEC);
 const B = spec.bindingsUrl;
@@ -716,13 +718,219 @@ class DurableObjectStorage {
   async transaction(fn) { return fn(this); }
   transactionSync(fn) { return fn(); }
   async sync() {}
-  get sql() { throw new Error('rucloud 尚未支援 SQLite 型 Durable Object 的 ctx.storage.sql'); }
+  get sql() { throw new Error('SQL is not enabled for this Durable Object class：請在 wrangler 的 migrations 用 new_sqlite_classes 宣告'); }
+}
+
+// ---------- SQLite 型 Durable Object（migrations 的 new_sqlite_classes） ----------
+//
+// 物件只活在一個程序裡，所以直接用 Node 內建的 node:sqlite 開它自己的資料庫檔，
+// ctx.storage.sql.exec() 和 Cloudflare 一樣是同步的。KV 型的 storage API 存在同一個檔案的 _cf_KV 表。
+
+const sqliteClasses = new Set(spec.sqliteClasses || []);
+const { DatabaseSync } = sqliteClasses.size ? await import('node:sqlite') : {};
+
+// 把多句 SQL 切開（忽略字串、識別字、註解裡的分號；CREATE TRIGGER 到 END; 才算一句）
+function splitSql(sql) {
+  const out = [];
+  let start = 0;
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i];
+    if (c === "'" || c === '"' || c === '`' || c === '[') {
+      const close = c === '[' ? ']' : c;
+      i++;
+      while (i < n) {
+        if (sql[i] === close) {
+          if (close !== ']' && sql[i + 1] === close) { i += 2; continue; }
+          break;
+        }
+        i++;
+      }
+      i++;
+    } else if (c === '-' && sql[i + 1] === '-') {
+      const j = sql.indexOf('\n', i);
+      i = j < 0 ? n : j + 1;
+    } else if (c === '/' && sql[i + 1] === '*') {
+      const j = sql.indexOf('*/', i + 2);
+      i = j < 0 ? n : j + 2;
+    } else if (c === ';') {
+      const stmt = sql.slice(start, i);
+      if (/^\s*create\s+(temp\w*\s+)?trigger\b/i.test(stmt) && !/\bend\s*$/i.test(stmt)) { i++; continue; }
+      if (stmt.trim()) out.push(stmt);
+      start = ++i;
+    } else {
+      i++;
+    }
+  }
+  const tail = sql.slice(start);
+  if (tail.replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '').trim()) out.push(tail);
+  return out;
+}
+
+function sqlValue(v) {
+  if (v === null || typeof v === 'number' || typeof v === 'string' || typeof v === 'bigint') return v;
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  if (ArrayBuffer.isView(v)) return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  throw new TypeError(`SQL 不支援這種值：${v === undefined ? 'undefined' : typeof v}`);
+}
+
+const outValue = (v) => (v instanceof Uint8Array ? v.buffer.slice(v.byteOffset, v.byteOffset + v.byteLength) : v);
+
+class SqlStorageCursor {
+  constructor(columnNames, rows, rowsRead, rowsWritten) {
+    this.columnNames = columnNames;
+    this._rows = rows;
+    this._i = 0;
+    this.rowsRead = rowsRead;
+    this.rowsWritten = rowsWritten;
+  }
+  _obj(row) {
+    const o = {};
+    this.columnNames.forEach((c, i) => { o[c] = row[i]; });
+    return o;
+  }
+  next() {
+    if (this._i >= this._rows.length) return { done: true, value: undefined };
+    return { done: false, value: this._obj(this._rows[this._i++]) };
+  }
+  [Symbol.iterator]() { return this; }
+  toArray() { const out = []; for (const r of this) out.push(r); return out; }
+  one() {
+    const rest = this._rows.length - this._i;
+    if (rest !== 1) throw new Error(rest === 0 ? 'Expected exactly one result from SQL query, but got no results.' : 'Expected exactly one result from SQL query, but got multiple results.');
+    return this.next().value;
+  }
+  *raw() { while (this._i < this._rows.length) yield this._rows[this._i++]; }
+}
+
+class SqlStorage {
+  constructor(storage) { this._s = storage; }
+  get _db() { return this._s._open(); }
+  exec(query, ...bindings) {
+    const db = this._db;
+    const stmts = splitSql(String(query));
+    if (!stmts.length) return new SqlStorageCursor([], [], 0, 0);
+    for (const s of stmts.slice(0, -1)) db.exec(s);
+    const stmt = db.prepare(stmts[stmts.length - 1]);
+    stmt.setReturnArrays(true);
+    const cols = stmt.columns().map((c) => c.name);
+    const params = bindings.map(sqlValue);
+    if (cols.length) {
+      const rows = stmt.all(...params).map((r) => r.map(outValue));
+      const writes = /^\s*(insert|update|delete|replace)\b/i.test(stmts[stmts.length - 1]) ? rows.length : 0;
+      return new SqlStorageCursor(cols, rows, rows.length, writes);
+    }
+    const r = stmt.run(...params);
+    return new SqlStorageCursor([], [], 0, Number(r.changes));
+  }
+  get databaseSize() {
+    const db = this._db;
+    const pages = db.prepare('PRAGMA page_count').get().page_count;
+    const size = db.prepare('PRAGMA page_size').get().page_size;
+    return pages * size;
+  }
+  prepare() { throw new Error('ctx.storage.sql.prepare() 已被 Cloudflare 移除，請用 exec()'); }
+}
+
+class SqliteDurableObjectStorage {
+  constructor(ns, id) {
+    this._file = `${spec.doSqliteDir}/${ns}/${id}.sqlite`;
+    this._alarm = new DurableObjectStorage(ns, id);  // 鬧鐘仍由 rucloud 排程
+    this._db = null;
+    this.sql = new SqlStorage(this);
+    const self = this;
+    // 同步的 KV API（ctx.storage.kv）
+    this.kv = {
+      get: (key) => self._get(key),
+      put: (key, value) => self._put({ [key]: value }),
+      delete: (key) => self._delete([key]) > 0,
+      list: (opts) => self._list(opts),
+    };
+  }
+  _open() {
+    if (!this._db) {
+      mkdirSync(dirname(this._file), { recursive: true });
+      this._db = new DatabaseSync(this._file);
+      this._db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; CREATE TABLE IF NOT EXISTS _cf_KV (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;');
+    }
+    return this._db;
+  }
+  _get(key) {
+    const r = this._open().prepare('SELECT value FROM _cf_KV WHERE key = ?').get(String(key));
+    return r ? deser(r.value) : undefined;
+  }
+  _put(entries) {
+    const st = this._open().prepare('INSERT OR REPLACE INTO _cf_KV (key, value) VALUES (?, ?)');
+    for (const [k, v] of Object.entries(entries)) st.run(k, ser(v));
+  }
+  _delete(keys) {
+    const st = this._open().prepare('DELETE FROM _cf_KV WHERE key = ?');
+    let n = 0;
+    for (const k of keys) n += Number(st.run(String(k)).changes);
+    return n;
+  }
+  _list(o = {}) {
+    const where = [];
+    const args = [];
+    if (o.prefix) { where.push('substr(key, 1, ?) = ?'); args.push(o.prefix.length, o.prefix); }
+    if (o.start !== undefined) { where.push('key >= ?'); args.push(o.start); }
+    if (o.startAfter !== undefined) { where.push('key > ?'); args.push(o.startAfter); }
+    if (o.end !== undefined) { where.push('key < ?'); args.push(o.end); }
+    const sql = `SELECT key, value FROM _cf_KV ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY key ${o.reverse ? 'DESC' : 'ASC'}${o.limit ? ` LIMIT ${Number(o.limit)}` : ''}`;
+    return new Map(this._open().prepare(sql).all(...args).map((r) => [r.key, deser(r.value)]));
+  }
+  async get(key) {
+    if (!Array.isArray(key)) return this._get(key);
+    const out = new Map();
+    for (const k of key) { const v = this._get(k); if (v !== undefined) out.set(k, v); }
+    return out;
+  }
+  async put(key, value) { this._put(typeof key === 'string' ? { [key]: value } : key); }
+  async delete(key) { const n = this._delete(Array.isArray(key) ? key : [key]); return Array.isArray(key) ? n : n > 0; }
+  async list(options) { return this._list(options); }
+  async deleteAll() {
+    if (this._db) { this._db.close(); this._db = null; }
+    for (const f of [this._file, `${this._file}-wal`, `${this._file}-shm`]) rmSync(f, { force: true });
+    await this._alarm.deleteAlarm();
+  }
+  getAlarm() { return this._alarm.getAlarm(); }
+  setAlarm(t) { return this._alarm.setAlarm(t); }
+  deleteAlarm() { return this._alarm.deleteAlarm(); }
+  transactionSync(fn) {
+    const db = this._open();
+    db.exec('SAVEPOINT rucloud_txn');
+    try {
+      const r = fn();
+      db.exec('RELEASE rucloud_txn');
+      return r;
+    } catch (e) {
+      db.exec('ROLLBACK TO rucloud_txn; RELEASE rucloud_txn');
+      throw e;
+    }
+  }
+  async transaction(fn) {
+    const db = this._open();
+    db.exec('SAVEPOINT rucloud_txn');
+    let rolledBack = false;
+    const txn = Object.create(this, { rollback: { value: () => { rolledBack = true; } } });
+    try {
+      const r = await fn(txn);
+      db.exec(rolledBack ? 'ROLLBACK TO rucloud_txn; RELEASE rucloud_txn' : 'RELEASE rucloud_txn');
+      return r;
+    } catch (e) {
+      db.exec('ROLLBACK TO rucloud_txn; RELEASE rucloud_txn');
+      throw e;
+    }
+  }
+  async sync() {}
 }
 
 class DurableObjectState {
-  constructor(ns, id) {
+  constructor(ns, id, sqlite) {
     this.id = new DurableObjectId(id);
-    this.storage = new DurableObjectStorage(ns, id);
+    this.storage = sqlite ? new SqliteDurableObjectStorage(ns, id) : new DurableObjectStorage(ns, id);
     this._blockers = [];
     this._sockets = new Set();
     this._autoResponse = null;
@@ -757,7 +965,7 @@ function getInstance(ns, id) {
     const def = spec.durableObjects.find((d) => d.binding === ns);
     const Cls = def && workerModule[def.className];
     if (typeof Cls !== 'function') throw new Error(`Durable Object 類別 ${def?.className ?? ns} 沒有從 main 模組 export`);
-    const state = new DurableObjectState(ns, id);
+    const state = new DurableObjectState(ns, id, sqliteClasses.has(def.className));
     inst = { state, obj: null };
     state._inst = inst;
     inst.obj = new Cls(state, env);

@@ -26,6 +26,7 @@ pub struct Wrangler {
     pub ai: Option<AiCfg>,
     pub ratelimits: Vec<RateLimitCfg>,
     pub services: Vec<ServiceCfg>,
+    pub migrations: Vec<MigrationCfg>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -101,6 +102,14 @@ pub struct DurableObjectsCfg {
 pub struct DurableObjectBindingCfg {
     pub name: String,
     pub class_name: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct MigrationCfg {
+    pub tag: Option<String>,
+    pub new_classes: Vec<String>,
+    pub new_sqlite_classes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

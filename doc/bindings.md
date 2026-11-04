@@ -89,7 +89,27 @@ return new Response(null, { status: 101, webSocket: client });
 | `ctx.blockConcurrencyWhile` | ✓ |
 | `alarm()` | ✓；失敗 10 秒後重試 |
 | WebSocket hibernation：`ctx.acceptWebSocket(ws, tags)`、`getWebSockets(tag)`、`getTags`、`setWebSocketAutoResponse`、`webSocketMessage/Close/Error`、`serializeAttachment` | ✓（物件不會真的休眠，一直留在記憶體） |
-| `ctx.storage.sql` | 不支援 |
+| SQLite 型（`migrations` 的 `new_sqlite_classes`）：`ctx.storage.sql.exec()`、`ctx.storage.kv`、`transactionSync` | ✓（見下方） |
+| Point-in-time recovery（`getBookmarkForTime` 等） | 不支援 |
+
+### SQLite 型 Durable Object
+
+```jsonc
+"migrations": [{ "tag": "v1", "new_sqlite_classes": ["ChatRoom"] }]
+```
+
+```js
+const { id } = this.ctx.storage.sql
+  .exec('INSERT INTO messages (name, text) VALUES (?, ?) RETURNING id', name, text)
+  .one();
+for (const row of this.ctx.storage.sql.exec('SELECT * FROM messages')) { … }
+```
+
+* 每個物件一個 SQLite 檔，由擁有該物件的 Worker 程序用 `node:sqlite` 開啟，所以 `exec()` 和 Cloudflare 一樣是**同步**的。
+* `exec` 可以一次多句（回傳最後一句的結果），參數只套用到最後一句。cursor：迭代、`toArray()`、`one()`、`raw()`、`columnNames`、`rowsRead`、`rowsWritten`。BLOB 讀出來是 `ArrayBuffer`。
+* 非同步的 `get/put/delete/list` 與同步的 `ctx.storage.kv.*` 都存在同一個資料庫的 `_cf_KV` 表；鬧鐘仍由 rucloud 排程。
+* `transactionSync()` / `transaction()` 用 SAVEPOINT，可以巢狀。
+* 和 Cloudflare 不同：cursor 會一次讀完全部結果（不是邊讀邊取）；資料庫連線在物件存在期間一直開著。
 
 同一個物件的事件是**完全依序**處理（比 Cloudflare 的 input gate 嚴格），所以物件之間互相呼叫形成環的話會卡住。
 
