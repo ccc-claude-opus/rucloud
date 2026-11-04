@@ -1,0 +1,48 @@
+[package]
+name = "rucloud"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A self-hostable Cloudflare-Workers-like platform: Rust edge gateway + D1/KV/R2/Queues/Cron/Durable Objects/Vectorize/AI Gateway bindings, running Worker code on Node.js"
+license = "MIT"
+repository = "https://github.com/ccc-claude-opus/rucloud"
+homepage = "https://github.com/ccc-claude-opus/rucloud"
+readme = "README.md"
+keywords = ["cloudflare", "workers", "serverless", "edge", "sqlite"]
+categories = ["web-programming::http-server", "command-line-utilities", "database"]
+include = ["src/**/*", "runtime/**/*", "Cargo.toml", "README.md", "LICENSE"]
+
+[[bin]]
+name = "rucloud"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+cron = "0.15"
+futures-util = "0.3"
+hex = "0.4"
+json5 = "0.4"
+md-5 = "0.10"
+mime_guess = "2"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+urlencoding = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

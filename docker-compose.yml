@@ -1,0 +1,22 @@
+# 用 rucloud 跑 test-apps：docker compose up --build
+#   TEST_APPS 指向 test-apps 資料夾（預設 ../cloudflare/test-apps）；各應用的 .dev.vars 會一起掛進去當密鑰
+services:
+  rucloud:
+    build: .
+    image: rucloud:latest
+    command: ["serve", "/etc/rucloud/rucloud.toml"]
+    ports:
+      - "8700:8700"   # edge（依 Host 分派）
+      - "8701:8701"   # mini-lang-expert
+      - "8702:8702"   # aichat
+      - "8703:8703"   # myshop
+      - "8704:8704"   # friendbook
+      - "8790:8790"   # AI Gateway
+    volumes:
+      - ${TEST_APPS:-../cloudflare/test-apps}:/apps:ro
+      - ./docker/rucloud.toml:/etc/rucloud/rucloud.toml:ro
+      - rucloud-data:/data
+    restart: unless-stopped
+
+volumes:
+  rucloud-data:

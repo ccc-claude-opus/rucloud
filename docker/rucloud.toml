@@ -1,0 +1,33 @@
+# docker compose 用的設定：test-apps 掛在 /apps（唯讀），資料存在 /data（volume）
+state_dir = "/data"
+
+# 依 Host 分派：http://<應用名稱>.localhost:8700
+[edge]
+port = 8700
+
+# AI Gateway：http://localhost:8790/<gateway>/<provider>/...
+[ai_gateway]
+port = 8790
+retries = 2
+
+[[app]]
+path = "/apps/mini-lang-expert"
+port = 8701
+instances = 2
+
+[[app]]
+path = "/apps/aichat"
+port = 8702
+instances = 2
+
+[[app]]
+path = "/apps/myshop"
+port = 8703
+instances = 2
+d1_init = { DB = "schema.sql" }
+
+[[app]]
+path = "/apps/friendbook"
+port = 8704
+instances = 2
+d1_init = { DB = "schema.sql" }

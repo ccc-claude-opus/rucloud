@@ -1,0 +1,6 @@
+// 最小的 Worker：給 showcase 的 service binding 呼叫
+{
+  "name": "hello",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01"
+}

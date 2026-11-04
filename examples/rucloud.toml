@@ -1,0 +1,12 @@
+# 同時跑兩個範例應用：rucloud serve examples/rucloud.toml
+state_dir = "../.rucloud"
+
+[edge]
+port = 8700          # http://showcase.localhost:8700、http://hello.localhost:8700
+
+[[app]]
+path = "showcase"
+port = 8710
+
+[[app]]
+path = "hello"
