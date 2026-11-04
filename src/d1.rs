@@ -81,6 +81,52 @@ impl D1 {
     }
 }
 
+impl D1 {
+    /// migrations 資料夾裡的 .sql 檔（依檔名排序）與是否已套用；紀錄表和 wrangler 一樣叫 d1_migrations
+    pub fn migrations(&self, dir: &Path) -> Result<Vec<(String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        ensure_migrations_table(&conn)?;
+        let applied: std::collections::HashSet<String> =
+            conn.prepare("SELECT name FROM d1_migrations")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut files: Vec<String> = match std::fs::read_dir(dir) {
+            Ok(rd) => rd
+                .flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|n| n.ends_with(".sql"))
+                .collect(),
+            Err(_) => vec![],
+        };
+        files.sort();
+        Ok(files.into_iter().map(|f| {
+            let done = applied.contains(&f);
+            (f, done)
+        }).collect())
+    }
+
+    /// 依序套用還沒套用的 migration，每個檔案一個交易；回傳這次套用的檔名
+    pub fn migrate(&self, dir: &Path) -> Result<Vec<String>> {
+        let pending: Vec<String> = self.migrations(dir)?.into_iter().filter(|(_, done)| !done).map(|(n, _)| n).collect();
+        let mut conn = self.conn.lock().unwrap();
+        for name in &pending {
+            let sql = std::fs::read_to_string(dir.join(name))?;
+            let tx = conn.transaction()?;
+            tx.execute_batch(&sql).map_err(|e| anyhow!("migration {name} 失敗：{e}"))?;
+            tx.execute("INSERT INTO d1_migrations (name) VALUES (?)", [name])?;
+            tx.commit()?;
+        }
+        Ok(pending)
+    }
+}
+
+fn ensure_migrations_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS d1_migrations (
+           id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,
+           applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);",
+    )?;
+    Ok(())
+}
+
 fn run_one(conn: &Connection, sql: &str, params: &[Value]) -> Result<QueryResult> {
     let start = Instant::now();
     let mut stmt = conn.prepare(sql)?;

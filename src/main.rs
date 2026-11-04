@@ -7,6 +7,7 @@ mod ai_gateway;
 mod app;
 mod assets;
 mod bindings;
+mod cli;
 mod config;
 mod d1;
 mod durable;
@@ -53,6 +54,12 @@ enum Cmd {
         /// 啟動時執行 SQL 檔，例如 --d1-init DB=schema.sql（可重複）
         #[arg(long = "d1-init", value_name = "BINDING=FILE")]
         d1_init: Vec<String>,
+        /// wrangler 設定的環境（env.<名稱>）
+        #[arg(long)]
+        env: Option<String>,
+        /// 啟動時套用 D1 的 migrations（migrations/ 資料夾）
+        #[arg(long)]
+        d1_migrate: bool,
         /// 程式碼改了不要自動重載
         #[arg(long)]
         no_watch: bool,
@@ -76,10 +83,20 @@ enum Cmd {
         #[arg(default_value = "rucloud.toml")]
         config: PathBuf,
     },
-    /// D1 資料庫操作
+    /// D1 資料庫操作（execute、migrations）
     D1 {
         #[command(subcommand)]
-        cmd: D1Cmd,
+        cmd: cli::D1Cmd,
+    },
+    /// KV 操作（put、get、list、delete）
+    Kv {
+        #[command(subcommand)]
+        cmd: cli::KvCmd,
+    },
+    /// R2 物件操作
+    R2 {
+        #[command(subcommand)]
+        cmd: cli::R2Cmd,
     },
     /// 單獨跑 AI Gateway
     AiGateway {
@@ -95,21 +112,6 @@ enum Cmd {
     },
 }
 
-#[derive(Subcommand)]
-enum D1Cmd {
-    /// 執行 SQL：rucloud d1 execute <應用資料夾> <資料庫名稱或綁定> --file schema.sql
-    Execute {
-        app: PathBuf,
-        database: String,
-        #[arg(long)]
-        file: Option<PathBuf>,
-        #[arg(long)]
-        command: Option<String>,
-        #[arg(long, default_value = ".rucloud")]
-        state: PathBuf,
-    },
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -117,7 +119,7 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
     match Cli::parse().cmd {
-        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port, no_sandbox, memory_mb, max_block_ms } => {
+        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port, no_sandbox, memory_mb, max_block_ms, env, d1_migrate } => {
             let s3 = match s3_port {
                 Some(port) => Some(s3::S3Cfg {
                     port,
@@ -147,6 +149,8 @@ async fn main() -> Result<()> {
                     instances,
                     env_file: None,
                     d1_init: init,
+                    env,
+                    d1_migrate,
                     watch: !no_watch,
                     sandbox: !no_sandbox,
                     allow_read: vec![],
@@ -158,7 +162,9 @@ async fn main() -> Result<()> {
             server::run(cfg, true).await
         }
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
-        Cmd::D1 { cmd: D1Cmd::Execute { app, database, file, command, state } } => d1_execute(app, database, file, command, state),
+        Cmd::D1 { cmd } => cli::d1(cmd),
+        Cmd::Kv { cmd } => cli::kv(cmd),
+        Cmd::R2 { cmd } => cli::r2(cmd),
         Cmd::AiGateway { port, state, cache_ttl, retries } => {
             std::fs::create_dir_all(&state)?;
             let gw = ai_gateway::Gateway::new(
@@ -171,30 +177,4 @@ async fn main() -> Result<()> {
             Ok(())
         }
     }
-}
-
-fn d1_execute(app: PathBuf, database: String, file: Option<PathBuf>, command: Option<String>, state: PathBuf) -> Result<()> {
-    let dir = app.canonicalize().with_context(|| format!("找不到 {}", app.display()))?;
-    let cfg = config::load_wrangler(&dir)?;
-    let name = cfg.name.clone().unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned());
-    let db_cfg = cfg
-        .d1_databases
-        .iter()
-        .find(|d| d.binding == database || d.db_name() == database)
-        .with_context(|| format!("{name} 沒有叫 {database} 的 D1 資料庫"))?;
-    let path = state.join(&name).join("d1").join(format!("{}.sqlite", db_cfg.db_name()));
-    let db = d1::D1::open(&path)?;
-    match (file, command) {
-        (Some(f), _) => {
-            let sql = std::fs::read_to_string(&f).with_context(|| format!("讀不到 {}", f.display()))?;
-            let r = db.exec(&sql)?;
-            println!("執行了 {} 句 SQL（{}）", r["count"], path.display());
-        }
-        (None, Some(sql)) => {
-            let r = db.query(&sql, &[])?;
-            println!("{}", serde_json::to_string_pretty(&r)?);
-        }
-        _ => anyhow::bail!("請給 --file 或 --command"),
-    }
-    Ok(())
 }

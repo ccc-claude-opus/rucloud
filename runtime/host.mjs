@@ -12,9 +12,9 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
-import { pathToFileURL } from 'node:url';
-import { mkdirSync, rmSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { dirname, relative, sep } from 'node:path';
 
 const spec = JSON.parse(process.env.RUCLOUD_SPEC);
 // token 只留在這個模組裡，Worker 程式碼從 process.env 拿不到
@@ -25,12 +25,59 @@ const AUTH = { 'x-rucloud-token': spec.token };
 const nativeFetch = globalThis.fetch;
 const enc = encodeURIComponent;
 
+// 模組規則（和 wrangler 的 rules 相同）：import 非 JS 檔時的處理方式
+const DEFAULT_RULES = [
+  { type: 'Text', globs: ['**/*.txt', '**/*.html', '**/*.sql'] },
+  { type: 'Data', globs: ['**/*.bin'] },
+  { type: 'CompiledWasm', globs: ['**/*.wasm', '**/*.wasm?module'] },
+];
+const RULES = [...(spec.rules || []), ...DEFAULT_RULES].map((r) => ({
+  type: r.type,
+  res: r.globs.map((g) => g.replace(/\?module$/, '')).map((g) => new RegExp(`^${g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*\//g, '\u0000').replace(/\*\*/g, '\u0001').replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\u0000/g, '(?:.*/)?').replace(/\u0001/g, '.*')}$`)),
+}));
+
+function moduleRule(url) {
+  const path = fileURLToPath(url);
+  const rel = relative(process.cwd(), path).split(sep).join('/');
+  return RULES.find((r) => r.res.some((re) => re.test(rel)))?.type;
+}
+
+const RELATIVE = /^(\.{1,2}\/|\/|file:)/;
+const EXTENSIONS = ['.ts', '.js', '.mjs', '.mts', '.tsx', '.jsx', '/index.ts', '/index.js', '/index.mjs'];
+
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier === 'cloudflare:workers') {
       return { url: new URL('./cloudflare-workers.mjs', import.meta.url).href, shortCircuit: true };
     }
-    return next(specifier, context);
+    try {
+      return next(specifier, context);
+    } catch (e) {
+      // 打包工具允許省略副檔名（import './util'），Node 不允許：依序試常見的副檔名
+      if (RELATIVE.test(specifier) && (e.code === 'ERR_MODULE_NOT_FOUND' || e.code === 'ERR_UNSUPPORTED_DIR_IMPORT')) {
+        for (const ext of EXTENSIONS) {
+          try { return next(specifier.replace(/\/$/, '') + ext, context); } catch { /* 試下一個 */ }
+        }
+      }
+      throw e;
+    }
+  },
+  load(url, context, next) {
+    if (url.startsWith('file:')) {
+      const type = moduleRule(url);
+      const path = fileURLToPath(url);
+      const b64 = () => JSON.stringify(readFileSync(path).toString('base64'));
+      if (type === 'Text') return { format: 'module', shortCircuit: true, source: `export default ${JSON.stringify(readFileSync(path, 'utf8'))};` };
+      if (type === 'Data') {
+        return { format: 'module', shortCircuit: true, source: `const b = Buffer.from(${b64()}, 'base64'); export default b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);` };
+      }
+      if (type === 'CompiledWasm') return { format: 'module', shortCircuit: true, source: `export default new WebAssembly.Module(Buffer.from(${b64()}, 'base64'));` };
+      // 打包工具允許不加 with { type: 'json' } 就 import JSON
+      if (path.endsWith('.json') && !context.importAttributes?.type) {
+        return { format: 'module', shortCircuit: true, source: `export default ${readFileSync(path, 'utf8')};` };
+      }
+    }
+    return next(url, context);
   },
 });
 

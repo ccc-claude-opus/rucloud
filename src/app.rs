@@ -48,7 +48,7 @@ pub struct Ctx<'a> {
 impl App {
     pub fn load(entry: &AppEntry, ctx: &Ctx) -> Result<Arc<App>> {
         let dir = entry.path.canonicalize().with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
-        let cfg = config::load_wrangler(&dir)?;
+        let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
         let name = entry
             .name
             .clone()
@@ -64,6 +64,9 @@ impl App {
             let store = Arc::new(D1::open(&state.join("d1").join(format!("{}.sqlite", db.db_name())))?);
             d1.insert(db.binding.clone(), store);
         }
+        if entry.d1_migrate {
+            crate::cli::migrate_all(&dir, &cfg, &d1, &name)?;
+        }
         for (binding, file) in &entry.d1_init {
             let db = d1.get(binding).with_context(|| format!("{name}：d1_init 指定的 {binding} 不是 D1 綁定"))?;
             let path = if file.is_relative() { dir.join(file) } else { file.clone() };
@@ -73,7 +76,7 @@ impl App {
         }
 
         let mut vars: BTreeMap<String, Value> = cfg.vars.clone().into_iter().collect();
-        for (k, v) in config::load_dev_vars(&dir) {
+        for (k, v) in config::load_dev_vars(&dir, entry.env.as_deref()) {
             vars.insert(k, Value::String(v));
         }
         if let Some(f) = &entry.env_file {
@@ -103,6 +106,7 @@ impl App {
             "compatibilityDate": cfg.compatibility_date,
             "sqliteClasses": cfg.migrations.iter().flat_map(|m| m.new_sqlite_classes.iter()).collect::<Vec<_>>(),
             "doSqliteDir": state.join("do-sqlite"),
+            "rules": cfg.rules,
         });
         let mut node_args = Vec::new();
         if entry.sandbox {

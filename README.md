@@ -2,7 +2,7 @@
 
 **A self-hostable Cloudflare-Workers-like platform.** The Rust core handles the edge gateway, static assets and every data binding (D1 / KV / R2 / Queues / Cron / Durable Objects / Vectorize / Rate Limiting / AI Gateway). Worker JavaScript runs unmodified on Node.js. Point it at a folder with a `wrangler.jsonc` and it runs.
 
-自架的 Cloudflare Workers 平台：**Rust 寫基礎建設、Node.js 跑 Worker 程式碼**。拿現成的 wrangler 專案（`wrangler.jsonc` + `src/worker.js` + `public/`），不改一行就能在自己的機器或 Docker 上跑。
+自架的 Cloudflare Workers 平台：**Rust 寫基礎建設、Node.js 跑 Worker 程式碼**。拿現成的 wrangler 專案（`wrangler.jsonc` 或 `wrangler.toml`、JS 或 TypeScript、`public/`），不改一行就能在自己的機器或 Docker 上跑。
 
 ```bash
 cargo install rucloud
@@ -68,9 +68,12 @@ flowchart LR
 
 | 指令 | 用途 |
 |---|---|
-| `rucloud dev [應用資料夾] --port 8787 [--instances N] [--d1-init DB=schema.sql] [--state .rucloud]` | 開發模式，程式碼改了自動重載 |
+| `rucloud dev [應用資料夾] --port 8787 [--env 名稱] [--instances N] [--d1-migrate] [--d1-init DB=schema.sql] [--state .rucloud]` | 開發模式，程式碼改了自動重載 |
 | `rucloud serve [rucloud.toml]` | 依設定檔同時跑多個應用（正式部署） |
 | `rucloud d1 execute <應用資料夾> <資料庫> --file schema.sql \| --command "SELECT …"` | 對本機 D1 執行 SQL |
+| `rucloud d1 migrations create \| list \| apply <應用資料夾> <資料庫>` | D1 migrations（同 wrangler 的格式） |
+| `rucloud kv put \| get \| list \| delete <應用資料夾> … --binding KV` | 本機 KV |
+| `rucloud r2 object put \| get \| list \| delete <應用資料夾> <bucket>/<key>` | 本機 R2 |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
 `rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。

@@ -27,12 +27,14 @@ pub struct Wrangler {
     pub ratelimits: Vec<RateLimitCfg>,
     pub services: Vec<ServiceCfg>,
     pub migrations: Vec<MigrationCfg>,
+    pub rules: Vec<RuleCfg>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct D1Cfg {
     pub binding: String,
     pub database_name: Option<String>,
+    pub migrations_dir: Option<String>,
 }
 
 impl D1Cfg {
@@ -104,6 +106,14 @@ pub struct DurableObjectBindingCfg {
     pub class_name: String,
 }
 
+/// 模組規則：import 非 JS 檔時怎麼處理（Text、Data、CompiledWasm）
+#[derive(Debug, Deserialize, Clone, serde::Serialize)]
+pub struct RuleCfg {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub globs: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct MigrationCfg {
@@ -143,24 +153,66 @@ pub struct ServiceCfg {
     pub service: String,
 }
 
-/// 找應用資料夾裡的 wrangler 設定檔並解析（JSONC：允許註解與結尾逗號）。
-pub fn load_wrangler(dir: &Path) -> Result<Wrangler> {
-    for name in ["wrangler.jsonc", "wrangler.json"] {
-        let p = dir.join(name);
+/// 這些設定不會從最上層繼承到 env.<名稱>（和 wrangler 一樣），環境裡沒寫就是沒有
+const NON_INHERITABLE: &[&str] = &[
+    "vars", "d1_databases", "kv_namespaces", "r2_buckets", "durable_objects", "queues", "services",
+    "vectorize", "ai", "ratelimits",
+];
+
+/// 找應用資料夾裡的 wrangler 設定檔並解析（wrangler.jsonc / wrangler.json / wrangler.toml）。
+/// env 有給時套用 `env.<名稱>` 的設定，應用名稱變成 `<name>-<env>`。
+pub fn load_wrangler(dir: &Path, env: Option<&str>) -> Result<Wrangler> {
+    let mut raw: Value = 'found: {
+        for name in ["wrangler.jsonc", "wrangler.json"] {
+            let p = dir.join(name);
+            if p.exists() {
+                let text = std::fs::read_to_string(&p).with_context(|| format!("讀不到 {}", p.display()))?;
+                break 'found json5::from_str(&text).with_context(|| format!("{} 格式不對", p.display()))?;
+            }
+        }
+        let p = dir.join("wrangler.toml");
         if p.exists() {
             let text = std::fs::read_to_string(&p).with_context(|| format!("讀不到 {}", p.display()))?;
-            return json5::from_str(&text).with_context(|| format!("{} 格式不對", p.display()));
+            break 'found toml::from_str(&text).with_context(|| format!("{} 格式不對", p.display()))?;
+        }
+        bail!("{} 裡找不到 wrangler.jsonc / wrangler.json / wrangler.toml", dir.display())
+    };
+    let envs = raw.as_object_mut().and_then(|o| o.remove("env"));
+    if let Some(env) = env {
+        let over = envs
+            .as_ref()
+            .and_then(|e| e.get(env))
+            .and_then(|e| e.as_object())
+            .with_context(|| format!("{}：wrangler 設定裡沒有 env.{env}", dir.display()))?;
+        let top = raw.as_object_mut().context("wrangler 設定的最上層要是物件")?;
+        for k in NON_INHERITABLE {
+            top.remove(*k);
+        }
+        let base_name = top.get("name").and_then(|n| n.as_str()).map(String::from);
+        for (k, v) in over {
+            top.insert(k.clone(), v.clone());
+        }
+        if !over.contains_key("name")
+            && let Some(n) = base_name
+        {
+            top.insert("name".into(), Value::String(format!("{n}-{env}")));
         }
     }
-    if dir.join("wrangler.toml").exists() {
-        bail!("{}：目前只支援 wrangler.jsonc / wrangler.json", dir.display());
-    }
-    bail!("{} 裡找不到 wrangler.jsonc", dir.display())
+    serde_json::from_value(raw).with_context(|| format!("{} 的 wrangler 設定有欄位格式不對", dir.display()))
 }
 
-/// 讀 .dev.vars（沒有就讀 .env）：KEY=VALUE，# 開頭是註解，值可以用引號包起來。
-pub fn load_dev_vars(dir: &Path) -> BTreeMap<String, String> {
-    for name in [".dev.vars", ".env"] {
+/// 讀 .dev.vars（有 env 時優先讀 .dev.vars.<env>；都沒有就讀 .env）：KEY=VALUE，# 開頭是註解，值可以用引號包起來。
+pub fn load_dev_vars(dir: &Path, env: Option<&str>) -> BTreeMap<String, String> {
+    let mut names = Vec::new();
+    if let Some(e) = env {
+        names.push(format!(".dev.vars.{e}"));
+    }
+    names.extend([".dev.vars".to_string()]);
+    if let Some(e) = env {
+        names.push(format!(".env.{e}"));
+    }
+    names.push(".env".to_string());
+    for name in names {
         if let Ok(text) = std::fs::read_to_string(dir.join(name)) {
             return parse_env(&text);
         }
@@ -222,6 +274,11 @@ pub struct AppEntry {
     pub instances: usize,
     /// 額外的密鑰檔（KEY=VALUE），會覆蓋 .dev.vars
     pub env_file: Option<PathBuf>,
+    /// wrangler 設定的環境（env.<名稱>）
+    pub env: Option<String>,
+    /// 啟動時套用 D1 的 migrations（migrations/ 資料夾）
+    #[serde(default)]
+    pub d1_migrate: bool,
     /// 啟動時對 D1 執行的 SQL 檔：{ DB = "schema.sql" }
     #[serde(default)]
     pub d1_init: BTreeMap<String, PathBuf>,
@@ -303,6 +360,41 @@ mod tests {
         assert_eq!(w.name.as_deref(), Some("x"));
         assert_eq!(w.d1_databases[0].db_name(), "x-db");
         assert!(w.assets.unwrap().run_worker_first.is_array());
+    }
+
+    #[test]
+    fn wrangler_toml_and_environments() {
+        let dir = std::env::temp_dir().join(format!("rucloud-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("wrangler.toml"),
+            r#"
+name = "app"
+main = "src/index.ts"
+[vars]
+MODE = "dev"
+[[d1_databases]]
+binding = "DB"
+database_name = "app-db"
+[env.staging]
+vars = { MODE = "staging" }
+[[env.staging.kv_namespaces]]
+binding = "KV"
+id = "x"
+"#,
+        )
+        .unwrap();
+        let base = load_wrangler(&dir, None).unwrap();
+        assert_eq!(base.vars["MODE"], "dev");
+        assert_eq!(base.d1_databases.len(), 1);
+        let st = load_wrangler(&dir, Some("staging")).unwrap();
+        assert_eq!(st.name.as_deref(), Some("app-staging"));
+        assert_eq!(st.main.as_deref(), Some("src/index.ts"), "main 會繼承");
+        assert_eq!(st.vars["MODE"], "staging");
+        assert!(st.d1_databases.is_empty(), "綁定不會繼承");
+        assert_eq!(st.kv_namespaces[0].binding, "KV");
+        assert!(load_wrangler(&dir, Some("nope")).is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

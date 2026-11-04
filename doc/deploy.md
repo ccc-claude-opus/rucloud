@@ -11,11 +11,17 @@ rucloud dev --d1-init DB=schema.sql  # http://localhost:8787
 * 讀 `.dev.vars`（沒有就讀 `.env`）當密鑰。
 * `main` 所在資料夾的檔案改了，Worker 程序會自動重開（`--no-watch` 關掉）。
 * 資料存在目前目錄的 `.rucloud/<應用名稱>/`（`--state` 可改）。
+* `--env production` 使用 wrangler 設定的 `env.production`，資料存在 `<name>-production`。
+* `--d1-migrate` 啟動時套用 `migrations/` 裡還沒套用的 SQL 檔。
 * `--d1-init` 每次啟動都會執行；schema 用 `CREATE TABLE IF NOT EXISTS` 就不會有問題。也可以手動：
 
 ```bash
 rucloud d1 execute . my-db --file schema.sql
 rucloud d1 execute . my-db --command "SELECT COUNT(*) FROM users"
+rucloud d1 migrations create . my-db add_orders   # migrations/0003_add_orders.sql
+rucloud d1 migrations apply . my-db
+rucloud kv put . greeting "你好" --binding KV
+rucloud r2 object put . my-bucket/logo.png --file logo.png
 ```
 
 ## 2. 正式：`rucloud serve rucloud.toml`
@@ -51,6 +57,8 @@ port = 8703                      # 可省略：只走 edge
 hosts = ["shop.example.com"]     # edge 用
 instances = 4                    # Worker 程序數，建議 ≈ CPU 核心數
 env_file = "/etc/rucloud/myshop.env"   # 密鑰，會蓋過 .dev.vars
+env = "production"               # wrangler 設定的 env.production（可省略）
+d1_migrate = true                # 啟動時套用 migrations/
 d1_init = { DB = "schema.sql" }
 watch = false
 sandbox = true                   # Node 權限模型（預設開）

@@ -92,7 +92,8 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
     loop {
         let started = Instant::now();
         let mut cmd = Command::new(&spec.node);
-        cmd.args(["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--disable-warning=ExperimentalWarning"])
+        // --experimental-transform-types：TypeScript 的 enum、namespace 等也能直接跑
+        cmd.args(["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--disable-warning=ExperimentalWarning", "--experimental-transform-types"])
             .args(&spec.node_args)
             .arg(&spec.host_js)
             .current_dir(&spec.cwd)

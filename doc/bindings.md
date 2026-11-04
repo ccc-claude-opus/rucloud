@@ -13,7 +13,11 @@
 | `caches.default` / `caches.open` | 程序內記憶體快取，依 `Cache-Control: max-age / s-maxage` |
 | `cloudflare:workers` | `DurableObject`、`WorkerEntrypoint`、`WorkflowEntrypoint`、`RpcTarget`、`env`、`waitUntil` |
 | `node:*` 模組 | 都能用（等同永遠開著 `nodejs_compat`） |
-| TypeScript `main` | Node 24 的型別剝除（只支援可直接剝除的語法） |
+| TypeScript `main` | Node 24 的型別轉換（`--experimental-transform-types`，enum、namespace 也可以）；不讀 `tsconfig.json` 的 `paths` |
+| 設定檔 | `wrangler.jsonc`、`wrangler.json`、`wrangler.toml`；`env.<名稱>` 多環境 |
+| 相對 import | 可以省略副檔名（依序找 `.ts` `.js` `.mjs` `.mts` `.tsx` `.jsx` 與 `/index.*`） |
+| 模組規則 | 預設 `.txt` `.html` `.sql` → 字串、`.bin` → `ArrayBuffer`、`.wasm` → `WebAssembly.Module`；`rules = [{ type = "Text" \| "Data" \| "CompiledWasm", globs = [...] }]` 自訂；`.json` 不需要 import attribute |
+| 打包 | 不打包（不跑 esbuild）：`node_modules` 裡的套件由 Node 直接載入 |
 | CPU 時間限制 | 沒有逐請求的 CPU 計時；事件迴圈卡住超過 `max_block_ms`（預設 30 秒）會重開程序 |
 | `process.env` | 只有 `PATH`、`HOME` 等基本變數；請用 `env` 取得設定與密鑰 |
 | 檔案系統 | 預設只能讀應用資料夾、不能寫（Node 權限模型） |

@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 0.6.0 — wrangler 相容性
+
+* 讀 `wrangler.toml`（和 `wrangler.jsonc` / `wrangler.json` 並列）。
+* 多環境：`rucloud dev --env production`、`rucloud.toml` 的 `env = "production"`；規則和 wrangler 相同（綁定與 `vars` 不繼承、名稱變成 `<name>-<env>`、優先讀 `.dev.vars.<env>`），資料也分開存放。
+* 模組規則：`import` 文字檔（`.txt` `.html` `.sql`）、資料檔（`.bin` → `ArrayBuffer`）、`.wasm`（→ `WebAssembly.Module`），以及 wrangler 設定裡自訂的 `rules`；JSON 不加 `with { type: 'json' }` 也能 import。
+* 相對 import 可以省略副檔名（`import './util'` 依序找 `.ts` `.js` `/index.ts`…），TypeScript 的 enum、namespace 也能跑（`--experimental-transform-types`）。
+* D1 migrations：`rucloud d1 migrations create | list | apply`（和 wrangler 相同的 `migrations/` 資料夾與 `d1_migrations` 紀錄表），`rucloud dev --d1-migrate`、`d1_migrate = true` 啟動時自動套用。
+* `rucloud kv put | get | list | delete`、`rucloud r2 object put | get | list | delete`：直接操作本機資料，rucloud 執行中也可以用。
+
 ## 0.5.0 — 沙箱與資源限制
 
 * **安全修正**：每個應用改用自己的綁定 token。之前所有應用共用一把，A 應用的 Worker 可以存取 B 應用的 D1、KV 等資料。
