@@ -1,0 +1,21 @@
+name = "tsapp"
+main = "src/index.ts"
+compatibility_date = "2025-11-01"
+
+[vars]
+STAGE = "dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ts-db"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.md"]
+
+[env.production]
+vars = { STAGE = "production" }
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "ts-db-prod"

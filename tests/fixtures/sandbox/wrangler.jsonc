@@ -1,0 +1,2 @@
+// 沙箱測試：嘗試做 Worker 不該做到的事
+{ "name": "sandbox", "main": "src/worker.js", "kv_namespaces": [{ "binding": "KV", "id": "x" }] }

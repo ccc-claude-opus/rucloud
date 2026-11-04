@@ -109,6 +109,15 @@ curl localhost:8710/api/do        # Durable Object 計數器
 
 myshop 與 friendbook 示範用的 `AUTH_SECRET` 放在 `.dev.vars.example`，自己部署時請換掉。
 
+## 開發
+
+```bash
+cargo test                      # 單元測試 + tests/e2e 整合測試（需要 Node.js 22.15+）
+node --test tests/e2e/*.test.mjs  # 只跑整合測試（先 cargo build）
+```
+
+整合測試每個檔案會在暫存資料夾起一個真的 rucloud，跑 `examples/` 與 `tests/fixtures/` 裡的應用。CI 設定在 `.github/workflows/ci.yml`。
+
 ## 授權
 
 MIT

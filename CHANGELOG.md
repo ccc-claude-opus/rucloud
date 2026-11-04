@@ -1,5 +1,16 @@
 # 更新紀錄
 
+## 0.8.0 — 整合測試與 CI
+
+* `tests/e2e/`：用 Node 內建的 test runner 寫的整合測試，`cargo test` 會一起跑（需要 Node.js）。每個測試檔起一個真的 rucloud，涵蓋：
+  * 靜態檔案與 ETag、內部路徑防護、D1、KV、R2（含 multipart）、Queues、Durable Object 的並行一致性、Vectorize、限流、service binding、edge、HTMLRewriter
+  * myshop、friendbook 兩個完整應用的流程
+  * WebSocket（Worker 回聲、Durable Object 聊天室）、S3 API（自己簽 SigV4）
+  * SQLite 型 Durable Object、沙箱與看門狗、wrangler.toml / TypeScript / 模組規則 / migrations / `--env`、`kv` `r2` `d1` 指令
+  * 開發模式的 `/__scheduled` 與自動重載
+* GitHub Actions：`cargo fmt --check`、`clippy -D warnings`、`cargo test`、`cargo publish --dry-run`、Docker build。
+* 加上 `rustfmt.toml` 並整體格式化。
+
 ## 0.7.0 — HTMLRewriter
 
 * `HTMLRewriter`（子集）：`on(selector, { element, text, comments })`、`onDocument({ doctype, text, comments, end })`、`transform(response)`。

@@ -1,0 +1,3 @@
+{ "name": "sqldo", "main": "src/worker.js",
+  "durable_objects": { "bindings": [{ "name": "DB", "class_name": "Store" }, { "name": "OLD", "class_name": "Old" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Store"], "new_classes": ["Old"] }] }
