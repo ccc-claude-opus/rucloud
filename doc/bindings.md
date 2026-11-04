@@ -23,7 +23,7 @@
 | 檔案系統 | 預設只能讀應用資料夾、不能寫（Node 權限模型） |
 | `WebSocketPair`、101 回應 | ✓（見下方 WebSocket 一節） |
 | `HTMLRewriter` | ✓ 子集（見下方） |
-| `connect()` | 不支援 |
+| `connect()`（`cloudflare:sockets`） | ✓ TCP、TLS、`startTls()`；沒有 Cloudflare 對 25 埠等的限制 |
 
 ## WebSocket
 
@@ -57,7 +57,7 @@ return new HTMLRewriter()
 | Text / Comment | `text`、`replace` `before` `after` `remove`；文字 handler 收到比對到的元素（含後代）裡的文字 |
 | Document | `doctype`、`text`、`comments`、`end(end => end.append())` |
 
-和 Cloudflare 的差異：**整份 HTML 讀完才處理**（大檔案會用比較多記憶體，第一個位元組也比較晚送出）；一個文字節點只呼叫一次 `text()`（`lastInTextNode` 一律是 `true`）；不支援 `:nth-child` 等其他虛擬類別。
+邊讀邊改：每收到一段就處理能確定的部分並送出；標籤被切在兩段之間時會等下一段。一個文字節點可能分成好幾次 `text()`，最後一次的 `lastInTextNode` 是 `true`。和 Cloudflare 的差異：不支援 `:nth-child` 等其他虛擬類別。
 
 ## Static Assets
 

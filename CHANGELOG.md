@@ -1,5 +1,10 @@
 # 更新紀錄
 
+## 0.14.0 — 串流 HTMLRewriter、TCP socket
+
+* **HTMLRewriter 改成串流**：邊讀邊改，第一段輸出不必等整份 HTML 讀完；標籤、註解、UTF-8 字元被切在兩段之間也能正確處理。文字節點可能分成好幾次 `text()`，最後一次 `lastInTextNode` 為 `true`（和 Cloudflare 一樣）。
+* **`connect()`**（`import { connect } from 'cloudflare:sockets'`）：TCP 連線，`secureTransport: 'off' | 'on' | 'starttls'`、`startTls()`、`opened`、`closed`、`close()`；`readable` / `writable` 是 Web Streams。可以接 PostgreSQL、Redis、SMTP 等。
+
 ## 0.13.0 — 資料：Hyperdrive、Analytics Engine、R2 事件、pull consumer、D1 匯出
 
 * **Hyperdrive**（`hyperdrive`）：`env.HD.connectionString`、`host`、`port`、`user`、`password`、`database`。rucloud 不做連線池，連線字串取自 `localConnectionString`、`.dev.vars` 或環境變數 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`（和 wrangler dev 相同）。

@@ -1,0 +1,2 @@
+// connect()（cloudflare:sockets）的測試
+{ "name": "sockets", "main": "src/worker.js" }

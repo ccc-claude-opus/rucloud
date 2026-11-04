@@ -52,6 +52,9 @@ registerHooks({
     if (specifier === 'cloudflare:workers' || specifier === 'cloudflare:workflows') {
       return { url: new URL('./cloudflare-workers.mjs', import.meta.url).href, shortCircuit: true };
     }
+    if (specifier === 'cloudflare:sockets') {
+      return { url: new URL('./cloudflare-sockets.mjs', import.meta.url).href, shortCircuit: true };
+    }
     try {
       return next(specifier, context);
     } catch (e) {

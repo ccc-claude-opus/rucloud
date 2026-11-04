@@ -65,7 +65,8 @@ flowchart LR
 | AI Gateway（log、快取、限流、重試） | `rucloud.toml` 的 `[ai_gateway]` | ✓ |
 | HTTPS（自備憑證、ACME 自動申請）、gzip / brotli、回應快取 | `rucloud.toml` 的 `[tls]`、`cache_mb` | ✓ |
 | `import … from 'cloudflare:workers'`、`caches.default` | — | ✓ |
-| `HTMLRewriter` | — | ✓ 子集（不串流） |
+| `HTMLRewriter` | — | ✓ 子集（串流） |
+| TCP socket（`connect()`、`cloudflare:sockets`） | — | ✓ |
 
 完整的 API 對照與差異見 [doc/bindings.md](doc/bindings.md)。
 

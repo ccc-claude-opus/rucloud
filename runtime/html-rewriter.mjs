@@ -5,7 +5,7 @@
 //     .onDocument({ end(end) { end.append('<!-- by rucloud -->', { html: true }); } })
 //     .transform(response)
 //
-// 和 Cloudflare 的差異：整份 HTML 讀完才處理（不是邊讀邊改）；一個文字節點只給一次 text()（lastInTextNode 一定是 true）；
+// 邊讀邊改：標籤被切在兩段之間時會等下一段；文字節點可能分成好幾次 text()（最後一次 lastInTextNode 是 true）。
 // 選擇器支援 * 標籤 #id .class [attr] [attr=v] [attr^=v] [attr$=v] [attr*=v] [attr~=v] [attr|=v]、後代（空白）與子代（>），
 // 以及 :first-child、:not(簡單選擇器)；不支援 :nth-child 等其他虛擬類別。
 
@@ -171,61 +171,101 @@ class DocumentEnd {
 
 const emitMut = (m, body) => m.before + (m.removed ? (m.replacement ?? '') : body) + m.after;
 
-// ---------- 斷詞 ----------
+// ---------- 斷詞（可以一段一段餵） ----------
 
-function* tokenize(html) {
-  const n = html.length;
-  let i = 0;
-  while (i < n) {
-    const lt = html.indexOf('<', i);
-    if (lt < 0) { yield { type: 'text', raw: html.slice(i) }; return; }
-    if (lt > i) yield { type: 'text', raw: html.slice(i, lt) };
-    i = lt;
-    if (html.startsWith('<!--', i)) {
-      const end = html.indexOf('-->', i + 4);
-      const stop = end < 0 ? n : end + 3;
-      yield { type: 'comment', raw: html.slice(i, stop), text: html.slice(i + 4, end < 0 ? n : end) };
-      i = stop;
-      continue;
+class Tokenizer {
+  constructor() { this.buf = ''; this.raw = null; }
+
+  // 回傳這次可以確定的 token；不完整的部分留到下次（final 時全部吐出）
+  feed(chunk, final = false) {
+    const buf = this.buf + chunk;
+    const out = [];
+    const n = buf.length;
+    let i = 0;
+    while (i < n) {
+      if (this.raw) {
+        // script / style 等：內容原樣當文字，直到對應的結束標籤
+        const close = buf.toLowerCase().indexOf(`</${this.raw}`, i);
+        if (close < 0) {
+          if (final) { out.push({ type: 'text', raw: buf.slice(i), last: true }); i = n; this.raw = null; break; }
+          const upto = Math.max(i, n - this.raw.length - 2);
+          if (upto > i) { out.push({ type: 'text', raw: buf.slice(i, upto), last: false }); i = upto; }
+          break;
+        }
+        if (close > i) out.push({ type: 'text', raw: buf.slice(i, close), last: true });
+        i = close;
+        this.raw = null;
+        continue;
+      }
+      const lt = buf.indexOf('<', i);
+      if (lt < 0) {
+        out.push({ type: 'text', raw: buf.slice(i), last: final });
+        i = n;
+        break;
+      }
+      if (lt > i) { out.push({ type: 'text', raw: buf.slice(i, lt), last: true }); i = lt; }
+      // 還看不出是註解還是 doctype（例如 "<!" 被切開）就等下一段
+      if (!final && n - i < 9) {
+        const rest = buf.slice(i).toLowerCase();
+        if ('<!--'.startsWith(rest) || '<!doctype'.startsWith(rest)) break;
+      }
+      if (buf.startsWith('<!--', i)) {
+        const end = buf.indexOf('-->', i + 4);
+        if (end < 0 && !final) break;
+        const stop = end < 0 ? n : end + 3;
+        out.push({ type: 'comment', raw: buf.slice(i, stop), text: buf.slice(i + 4, end < 0 ? n : end) });
+        i = stop;
+        continue;
+      }
+      if (/^<!doctype/i.test(buf.slice(i, i + 9))) {
+        const end = buf.indexOf('>', i);
+        if (end < 0 && !final) break;
+        const stop = end < 0 ? n : end + 1;
+        out.push({ type: 'doctype', raw: buf.slice(i, stop) });
+        i = stop;
+        continue;
+      }
+      const m = /^<(\/?)([a-zA-Z][\w:-]*)/.exec(buf.slice(i, i + 64));
+      if (!m) {
+        // "<" 後面還沒來，或標籤名稱被切開
+        if (!final && /^<\/?[a-zA-Z]?[\w:-]*$/.test(buf.slice(i))) break;
+        out.push({ type: 'text', raw: '<', last: true });
+        i++;
+        continue;
+      }
+      // 找標籤結尾（跳過引號裡的 >）
+      let j = i + m[0].length;
+      let quote = null;
+      while (j < n) {
+        const c = buf[j];
+        if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c;
+        else if (c === '>') break;
+        j++;
+      }
+      if (j >= n) {
+        if (!final) break;
+        out.push({ type: 'text', raw: buf.slice(i), last: true });
+        i = n;
+        break;
+      }
+      const raw = buf.slice(i, j + 1);
+      const name = m[2].toLowerCase();
+      i = j + 1;
+      if (m[1]) { out.push({ type: 'end', raw, name }); continue; }
+      const attrs = new Map();
+      const body = raw.slice(m[0].length, -1);
+      const are = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+      let a;
+      while ((a = are.exec(body))) {
+        const k = a[1].toLowerCase();
+        if (!attrs.has(k)) attrs.set(k, a[2] ?? a[3] ?? a[4] ?? '');
+      }
+      const selfClosing = /\/\s*>$/.test(raw);
+      out.push({ type: 'start', raw, name, attrs, selfClosing });
+      if (RAW_TEXT.has(name) && !selfClosing) this.raw = name;
     }
-    if (/^<!doctype/i.test(html.slice(i, i + 9))) {
-      const end = html.indexOf('>', i);
-      const stop = end < 0 ? n : end + 1;
-      yield { type: 'doctype', raw: html.slice(i, stop) };
-      i = stop;
-      continue;
-    }
-    const m = /^<(\/?)([a-zA-Z][\w:-]*)/.exec(html.slice(i, i + 64));
-    if (!m) { yield { type: 'text', raw: '<' }; i++; continue; }
-    // 找標籤結尾（跳過引號裡的 >）
-    let j = i + m[0].length;
-    let quote = null;
-    while (j < n) {
-      const c = html[j];
-      if (quote) { if (c === quote) quote = null; } else if (c === '"' || c === "'") quote = c;
-      else if (c === '>') break;
-      j++;
-    }
-    const raw = html.slice(i, j + 1);
-    const name = m[2].toLowerCase();
-    i = j + 1;
-    if (m[1]) { yield { type: 'end', raw, name }; continue; }
-    const attrs = new Map();
-    const body = raw.slice(m[0].length, -1);
-    const are = /([^\s"'>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
-    let a;
-    while ((a = are.exec(body))) {
-      const k = a[1].toLowerCase();
-      if (!attrs.has(k)) attrs.set(k, a[2] ?? a[3] ?? a[4] ?? '');
-    }
-    const selfClosing = /\/\s*>$/.test(raw);
-    yield { type: 'start', raw, name, attrs, selfClosing };
-    if (RAW_TEXT.has(name) && !selfClosing) {
-      const close = html.toLowerCase().indexOf(`</${name}`, i);
-      const stop = close < 0 ? n : close;
-      if (stop > i) yield { type: 'text', raw: html.slice(i, stop), rawText: true };
-      i = stop;
-    }
+    this.buf = buf.slice(i);
+    return out.filter((t) => t.type !== 'text' || t.raw !== '');
   }
 }
 
@@ -236,120 +276,153 @@ export class HTMLRewriter {
   on(selector, handlers) { this._el.push({ parts: parseSelector(selector), h: handlers }); return this; }
   onDocument(handlers) { this._doc.push(handlers); return this; }
 
+  // 邊讀邊改：每收到一段就處理能確定的部分並送出
   transform(response) {
     const ct = response.headers.get('content-type') || '';
     if (ct && !/html/i.test(ct)) return response;
-    const self = this;
     const headers = new Headers(response.headers);
     headers.delete('content-length');
+    const tz = new Tokenizer();
+    const proc = new Processor(this);
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    const reader = response.body?.getReader();
     const body = new ReadableStream({
-      async start(controller) {
+      async pull(controller) {
         try {
-          const html = response.body ? await response.text() : '';
-          controller.enqueue(new TextEncoder().encode(await self._rewrite(html)));
-          controller.close();
+          // pull() 沒有 enqueue 就返回的話串流會停住，所以一直讀到有東西可送或讀完
+          for (;;) {
+            const { done, value } = reader ? await reader.read() : { done: true };
+            const text = done ? decoder.decode() : decoder.decode(value, { stream: true });
+            for (const tok of tz.feed(text, done)) await proc.token(tok);
+            if (done) await proc.finish();
+            const out = proc.take();
+            if (out) controller.enqueue(encoder.encode(out));
+            if (done) { controller.close(); return; }
+            if (out) return;
+          }
         } catch (e) {
           controller.error(e);
+          reader?.cancel(e).catch(() => {});
         }
       },
+      cancel(reason) { return reader?.cancel(reason); },
     });
     return new Response(body, { status: response.status, statusText: response.statusText, headers });
   }
 
   async _rewrite(html) {
-    let out = '';
-    const stack = [];        // { el, index, childCount, skip, keep, raw }
-    let skipDepth = 0;       // >0：在被移除 / 被替換內容的元素裡面
-    const rootCounter = { childCount: 0 };
-    const handlersFor = (kind) => this._el.filter((r) => r.h[kind] && selectorMatch(r.parts, stack));
-    const textHandlers = () => {
+    const proc = new Processor(this);
+    for (const tok of new Tokenizer().feed(html, true)) await proc.token(tok);
+    await proc.finish();
+    return proc.take();
+  }
+}
+
+class Processor {
+  constructor(rw) {
+    this.rw = rw;
+    this.out = '';
+    this.stack = [];        // { el, index, childCount, skip, pendingAfter }
+    this.skipDepth = 0;     // >0：在被移除 / 被替換內容的元素裡面
+    this.root = { childCount: 0 };
+  }
+
+  take() { const o = this.out; this.out = ''; return o; }
+
+  handlersFor(kind) { return this.rw._el.filter((r) => r.h[kind] && selectorMatch(r.parts, this.stack)); }
+
+  textHandlers() {
+    const hs = [];
+    for (const r of this.rw._el) {
+      if (!r.h.text) continue;
+      // 文字屬於比對到的元素（含其後代）
+      for (let k = this.stack.length - 1; k >= 0; k--) {
+        if (selectorMatch(r.parts, this.stack, k)) { hs.push(r.h); break; }
+      }
+    }
+    return hs;
+  }
+
+  async token(tok) {
+    const stack = this.stack;
+    if (tok.type === 'start') {
+      if (this.skipDepth > 0) { if (!VOID.has(tok.name) && !tok.selfClosing) this.skipDepth++; return; }
+      const parent = stack[stack.length - 1] || this.root;
+      const el = new Element(tok.name, tok.attrs, tok.selfClosing);
+      const node = { el, index: parent.childCount++, childCount: 0 };
+      stack.push(node);
+      for (const r of this.handlersFor('element')) await r.h.element(el);
+      const isVoid = VOID.has(tok.name) || tok.selfClosing;
+      if (el._m.removed && !el._keepContent) {
+        this.out += el._m.before + (el._m.replacement ?? '');
+        if (isVoid) { stack.pop(); this.out += el._m.after; } else { node.skip = true; this.skipDepth = 1; node.pendingAfter = el._m.after; }
+        return;
+      }
+      this.out += el._m.before;
+      if (!el._keepContent) this.out += el._startTag(tok.raw);
+      this.out += el._prepend;
+      if (isVoid) {
+        stack.pop();
+        this.out += el._append + el._m.after;
+        return;
+      }
+      if (el._inner !== null) { this.out += el._inner; node.skip = true; this.skipDepth = 1; }
+      return;
+    }
+    if (tok.type === 'end') {
+      if (this.skipDepth > 1) { this.skipDepth--; return; }
+      // 找對應的開始標籤（容忍沒關好的 HTML）
+      let k = stack.length - 1;
+      while (k >= 0 && stack[k].el.tagName !== tok.name) k--;
+      if (k < 0) { if (this.skipDepth === 0) this.out += tok.raw; return; }
+      while (stack.length - 1 > k) await this.close(stack.pop(), null);
+      this.skipDepth = 0;
+      await this.close(stack.pop(), tok);
+      return;
+    }
+    if (this.skipDepth > 0) return;
+    if (tok.type === 'text') {
+      const hs = [...this.textHandlers(), ...this.rw._doc.filter((d) => d.text)];
+      if (!hs.length) { this.out += tok.raw; return; }
+      const chunk = new TextChunk(tok.raw);
+      chunk.lastInTextNode = tok.last !== false;
+      for (const h of hs) await h.text(chunk);
+      this.out += emitMut(chunk._m, tok.raw);
+      return;
+    }
+    if (tok.type === 'comment') {
       const hs = [];
-      for (const r of this._el) {
-        if (!r.h.text) continue;
-        // 文字屬於比對到的元素（含其後代）
-        for (let k = stack.length - 1; k >= 0; k--) {
-          if (selectorMatch(r.parts, stack, k)) { hs.push(r.h); break; }
-        }
-      }
-      return hs;
-    };
-
-    for (const tok of tokenize(html)) {
-      if (tok.type === 'start') {
-        if (skipDepth > 0) { if (!VOID.has(tok.name) && !tok.selfClosing) skipDepth++; continue; }
-        const parent = stack[stack.length - 1] || rootCounter;
-        const el = new Element(tok.name, tok.attrs, tok.selfClosing);
-        const node = { el, index: parent.childCount++, childCount: 0, raw: tok.raw };
-        stack.push(node);
-        for (const r of handlersFor('element')) await r.h.element(el);
-        const isVoid = VOID.has(tok.name) || tok.selfClosing;
-        if (el._m.removed && !el._keepContent) {
-          out += el._m.before + (el._m.replacement ?? '');
-          stack.pop();
-          if (isVoid) { out += el._m.after; } else { node.skip = true; skipDepth = 1; node.pendingAfter = el._m.after; stack.push(node); }
-          continue;
-        }
-        out += el._m.before;
-        if (!el._keepContent) out += el._startTag(tok.raw);
-        out += el._prepend;
-        if (isVoid) {
-          stack.pop();
-          out += el._append + el._m.after;
-          continue;
-        }
-        if (el._inner !== null) { out += el._inner; node.skip = true; skipDepth = 1; }
-        continue;
-      }
-      if (tok.type === 'end') {
-        if (skipDepth > 1) { skipDepth--; continue; }
-        // 找對應的開始標籤（容忍沒關好的 HTML）
-        let k = stack.length - 1;
-        while (k >= 0 && stack[k].el.tagName !== tok.name) k--;
-        if (k < 0) { if (skipDepth === 0) out += tok.raw; continue; }
-        while (stack.length - 1 > k) await closeNode(stack.pop(), null);
-        skipDepth = 0;
-        await closeNode(stack.pop(), tok);
-        continue;
-      }
-      if (skipDepth > 0) continue;
-      if (tok.type === 'text') {
-        const hs = [...textHandlers(), ...this._doc.filter((d) => d.text)];
-        if (!hs.length) { out += tok.raw; continue; }
-        const chunk = new TextChunk(tok.raw);
-        for (const h of hs) await h.text(chunk);
-        out += emitMut(chunk._m, tok.raw);
-        continue;
-      }
-      if (tok.type === 'comment') {
-        const hs = [];
-        for (const r of this._el) if (r.h.comments && stack.some((_, k) => selectorMatch(r.parts, stack, k))) hs.push(r.h);
-        hs.push(...this._doc.filter((d) => d.comments));
-        if (!hs.length) { out += tok.raw; continue; }
-        const c = new Comment(tok.text);
-        for (const h of hs) await h.comments(c);
-        out += emitMut(c._m, c.text === tok.text ? tok.raw : `<!--${c.text}-->`);
-        continue;
-      }
-      if (tok.type === 'doctype') {
-        const m = /^<!doctype\s+([^\s>]+)?(?:\s+public\s+"([^"]*)")?(?:\s+"([^"]*)")?/i.exec(tok.raw) || [];
-        for (const d of this._doc) if (d.doctype) await d.doctype({ name: m[1] ?? null, publicId: m[2] ?? null, systemId: m[3] ?? null });
-        out += tok.raw;
-      }
+      for (const r of this.rw._el) if (r.h.comments && stack.some((_, k) => selectorMatch(r.parts, stack, k))) hs.push(r.h);
+      hs.push(...this.rw._doc.filter((d) => d.comments));
+      if (!hs.length) { this.out += tok.raw; return; }
+      const c = new Comment(tok.text);
+      for (const h of hs) await h.comments(c);
+      this.out += emitMut(c._m, c.text === tok.text ? tok.raw : `<!--${c.text}-->`);
+      return;
     }
-    while (stack.length) await closeNode(stack.pop(), null);
+    if (tok.type === 'doctype') {
+      const m = /^<!doctype\s+([^\s>]+)?(?:\s+public\s+"([^"]*)")?(?:\s+"([^"]*)")?/i.exec(tok.raw) || [];
+      for (const d of this.rw._doc) if (d.doctype) await d.doctype({ name: m[1] ?? null, publicId: m[2] ?? null, systemId: m[3] ?? null });
+      this.out += tok.raw;
+    }
+  }
+
+  async close(node, tok) {
+    const el = node.el;
+    if (node.skip && el._m.removed) { this.out += node.pendingAfter ?? el._m.after; return; }
+    const end = new EndTag(el.tagName);
+    for (const h of el._endHandlers) await h(end);
+    this.out += el._append;
+    if (!el._keepContent) this.out += emitMut(end._m, tok ? tok.raw : '');
+    else this.out += end._m.before + end._m.after;
+    this.out += el._m.after;
+  }
+
+  async finish() {
+    while (this.stack.length) await this.close(this.stack.pop(), null);
     const end = new DocumentEnd();
-    for (const d of this._doc) if (d.end) await d.end(end);
-    return out + end._append;
-
-    async function closeNode(node, tok) {
-      const el = node.el;
-      if (node.skip && el._m.removed) { out += node.pendingAfter ?? el._m.after; return; }
-      const end = new EndTag(el.tagName);
-      for (const h of el._endHandlers) await h(end);
-      out += el._append;
-      if (!el._keepContent) out += emitMut(end._m, tok ? tok.raw : '');
-      else out += end._m.before + end._m.after;
-      out += el._m.after;
-    }
+    for (const d of this.rw._doc) if (d.end) await d.end(end);
+    this.out += end._append;
   }
 }
