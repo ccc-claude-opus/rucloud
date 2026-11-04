@@ -5,6 +5,7 @@
 mod admin;
 mod ai;
 mod ai_gateway;
+mod analytics;
 mod app;
 mod assets;
 mod bindings;
@@ -182,6 +183,12 @@ enum Cmd {
         #[command(flatten)]
         admin: cli::AdminRef,
     },
+    /// Analytics Engine 的 SQL 查詢（每個 dataset 是一個 view）
+    Analytics {
+        sql: String,
+        #[arg(long, default_value = ".rucloud")]
+        state: PathBuf,
+    },
     /// 備份整個資料夾（D1、KV、R2、Durable Objects、佇列、部署的版本）；執行中也可以
     Backup {
         #[arg(long, default_value = ".rucloud")]
@@ -308,6 +315,11 @@ async fn main() -> Result<()> {
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
+        Cmd::Analytics { sql, state } => {
+            let a = analytics::Analytics::open(&state.join("analytics.sqlite"))?;
+            println!("{}", serde_json::to_string_pretty(&a.query(&sql)?["data"])?);
+            Ok(())
+        }
         Cmd::Purge { app, prefix, admin } => cli::purge(&app, prefix.as_deref(), &admin).await,
         Cmd::Backup { state, out, with_logs } => cli::backup(&state, &out, with_logs),
         Cmd::Restore { archive, state, force } => cli::restore(&archive, &state, force),

@@ -33,6 +33,8 @@ pub struct S3 {
     cfg: S3Cfg,
     /// 所有應用；bucket 依目前版本的設定找（部署新版本可能新增 bucket）
     slots: Vec<Arc<crate::app::Slot>>,
+    /// R2 事件通知用
+    queues: Option<Arc<crate::queues::Queues>>,
 }
 
 struct S3Err(StatusCode, &'static str, String);
@@ -68,8 +70,29 @@ fn err(status: StatusCode, code: &'static str, msg: impl Into<String>) -> S3Err 
 }
 
 impl S3 {
-    pub fn new(cfg: S3Cfg, slots: Vec<Arc<crate::app::Slot>>) -> Arc<Self> {
-        Arc::new(Self { cfg, slots })
+    pub fn new(cfg: S3Cfg, slots: Vec<Arc<crate::app::Slot>>, queues: Arc<crate::queues::Queues>) -> Arc<Self> {
+        Arc::new(Self {
+            cfg,
+            slots,
+            queues: Some(queues),
+        })
+    }
+
+    /// 物件變動後送 R2 事件通知
+    async fn notify(&self, bucket: &str, action: &'static str, key: &str) {
+        let (Some(app), Some(queues)) = (self.buckets().remove(bucket), self.queues.clone()) else {
+            return;
+        };
+        let (b, k) = (bucket.to_string(), key.to_string());
+        let _ = tokio::task::spawn_blocking(move || {
+            let obj = if action == "DeleteObject" {
+                None
+            } else {
+                app.r2().ok().and_then(|r| r.head(&b, &k).ok().flatten())
+            };
+            crate::r2::notify(&app, &queues, &b, action, &k, obj.as_ref());
+        })
+        .await;
     }
 
     /// bucket 名稱 → 存放它的應用（同名時第一個為準）
@@ -344,7 +367,13 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
             )),
             Method::GET => list_objects(r2, &bucket, &query).await,
             Method::HEAD => Ok(StatusCode::OK.into_response()),
-            Method::POST if has("delete") => delete_objects(r2, &bucket, req).await,
+            Method::POST if has("delete") => {
+                let (resp, keys) = delete_objects(r2, &bucket, req).await?;
+                for k in keys {
+                    s3.notify(&bucket, "DeleteObject", &k).await;
+                }
+                Ok(resp)
+            }
             _ => Err(err(StatusCode::METHOD_NOT_ALLOWED, "MethodNotAllowed", "不支援的 bucket 操作")),
         };
     }
@@ -357,8 +386,16 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
                 .ok_or_else(|| err(StatusCode::BAD_REQUEST, "InvalidArgument", "partNumber 要在 1–10000"))?;
             upload_part(r2, &bucket, &qv("uploadId").unwrap_or_default(), n, req).await
         }
-        Method::PUT if req.headers().contains_key("x-amz-copy-source") => copy_object(s3, r2, &bucket, &key, req.headers()).await,
-        Method::PUT => put_object(r2, &bucket, &key, req).await,
+        Method::PUT if req.headers().contains_key("x-amz-copy-source") => {
+            let r = copy_object(s3, r2, &bucket, &key, req.headers()).await?;
+            s3.notify(&bucket, "CopyObject", &key).await;
+            Ok(r)
+        }
+        Method::PUT => {
+            let r = put_object(r2, &bucket, &key, req).await?;
+            s3.notify(&bucket, "PutObject", &key).await;
+            Ok(r)
+        }
         Method::DELETE if has("uploadId") => {
             let id = qv("uploadId").unwrap_or_default();
             run(move || r2.abort_upload(&id)).await?;
@@ -367,6 +404,7 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
         Method::DELETE => {
             let (b, k) = (bucket.clone(), key.clone());
             run(move || r2.delete(&b, &[k])).await?;
+            s3.notify(&bucket, "DeleteObject", &key).await;
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         Method::POST if has("uploads") => {
@@ -382,7 +420,11 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
                 ),
             ))
         }
-        Method::POST if has("uploadId") => complete_upload(r2, &bucket, &key, &qv("uploadId").unwrap_or_default(), req).await,
+        Method::POST if has("uploadId") => {
+            let r = complete_upload(r2, &bucket, &key, &qv("uploadId").unwrap_or_default(), req).await?;
+            s3.notify(&bucket, "CompleteMultipartUpload", &key).await;
+            Ok(r)
+        }
         _ => Err(err(StatusCode::METHOD_NOT_ALLOWED, "MethodNotAllowed", "不支援的操作")),
     }
 }
@@ -611,7 +653,7 @@ async fn copy_object(s3: &S3, r2: Arc<R2>, bucket: &str, key: &str, h: &HeaderMa
     ))
 }
 
-async fn delete_objects(r2: Arc<R2>, bucket: &str, req: Request) -> R<axum::response::Response> {
+async fn delete_objects(r2: Arc<R2>, bucket: &str, req: Request) -> R<(axum::response::Response, Vec<String>)> {
     let body = axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024)
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, "MalformedXML", e.to_string()))?;
@@ -630,7 +672,7 @@ async fn delete_objects(r2: Arc<R2>, bucket: &str, req: Request) -> R<axum::resp
         }
     }
     out.push_str("</DeleteResult>");
-    Ok(xml(StatusCode::OK, out))
+    Ok((xml(StatusCode::OK, out), keys))
 }
 
 async fn get_object(r2: Arc<R2>, bucket: &str, key: &str, head: bool, h: &HeaderMap) -> R<axum::response::Response> {
@@ -727,6 +769,7 @@ mod tests {
                 secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             },
             slots: vec![],
+            queues: None,
         };
         let mut h = HeaderMap::new();
         h.insert("host", "examplebucket.s3.amazonaws.com".parse().unwrap());

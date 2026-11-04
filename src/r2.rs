@@ -363,3 +363,35 @@ pub async fn receive(body: axum::body::Body, aws_chunked: bool, tmp: &Path) -> R
         sha256: hex::encode(sha.finalize()),
     })
 }
+
+/// 物件變動時依應用的 event_notifications 送訊息到佇列（內容格式和 Cloudflare 的 R2 事件通知相同）
+pub fn notify(app: &crate::app::App, queues: &crate::queues::Queues, bucket: &str, action: &str, key: &str, obj: Option<&Value>) {
+    let Some(cfg) = app
+        .cfg
+        .r2_buckets
+        .iter()
+        .find(|b| b.bucket_name.as_deref().unwrap_or(&b.binding) == bucket)
+    else {
+        return;
+    };
+    for n in &cfg.event_notifications {
+        if (!n.actions.is_empty() && !n.actions.iter().any(|a| a == action))
+            || n.prefix.as_deref().is_some_and(|p| !key.starts_with(p))
+            || n.suffix.as_deref().is_some_and(|s| !key.ends_with(s))
+        {
+            continue;
+        }
+        let mut object = json!({ "key": key });
+        if let Some(o) = obj {
+            object["size"] = o["size"].clone();
+            object["eTag"] = o["etag"].clone();
+        }
+        let body = json!({
+            "account": "rucloud", "action": action, "bucket": bucket, "object": object,
+            "eventTime": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        });
+        if let Err(e) = queues.send(&n.queue, &[json!({ "body": body.to_string(), "contentType": "json" })]) {
+            tracing::warn!("R2 事件通知送不出去（佇列 {}）：{e:#}", n.queue);
+        }
+    }
+}

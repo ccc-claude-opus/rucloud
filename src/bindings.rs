@@ -21,6 +21,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 pub struct Hub {
     pub apps: HashMap<String, Arc<crate::app::Slot>>,
     pub queues: Arc<Queues>,
+    pub analytics: Arc<crate::analytics::Analytics>,
 }
 
 type S = State<Arc<Hub>>;
@@ -83,6 +84,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/service/{binding}", any(service))
         .route("/b/{app}/service/{binding}/rpc", post(service_rpc))
         .route("/b/{app}/workflow/{name}", post(workflow))
+        .route("/b/{app}/analytics/{dataset}", post(analytics_write))
         .layer(middleware::from_fn_with_state(hub.clone(), auth))
         .layer(DefaultBodyLimit::disable())
         .with_state(hub)
@@ -278,15 +280,19 @@ async fn r2_put(State(hub): S, Path((app, binding)): Path<(String, String)>, Que
     } else {
         json!({})
     };
-    Ok(Json(
-        blocking(move || r2.commit(&b, &key, &tmp, got.size, &got.md5, &http, &custom)).await?,
-    ))
+    let (b2, k2) = (b.clone(), key.clone());
+    let obj = blocking(move || r2.commit(&b, &key, &tmp, got.size, &got.md5, &http, &custom)).await?;
+    crate::r2::notify(&app, &hub.queues, &b2, "PutObject", &k2, Some(&obj));
+    Ok(Json(obj))
 }
 
 async fn r2_delete(State(hub): S, Path((app, binding)): Path<(String, String)>, Query(q): Query<R2Query>) -> R<StatusCode> {
     let app = hub.app(&app)?;
     let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
-    blocking(move || r2.delete(&b, &[q.key.unwrap_or_default()])).await?;
+    let key = q.key.unwrap_or_default();
+    let (b2, k2) = (b.clone(), key.clone());
+    blocking(move || r2.delete(&b, &[key])).await?;
+    crate::r2::notify(&app, &hub.queues, &b2, "DeleteObject", &k2, None);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -294,7 +300,11 @@ async fn r2_delete_many(State(hub): S, Path((app, binding)): Path<(String, Strin
     let app = hub.app(&app)?;
     let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
     let keys: Vec<String> = serde_json::from_value(body["keys"].clone()).unwrap_or_default();
+    let (b2, k2) = (b.clone(), keys.clone());
     blocking(move || r2.delete(&b, &keys)).await?;
+    for k in &k2 {
+        crate::r2::notify(&app, &hub.queues, &b2, "DeleteObject", k, None);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -364,7 +374,7 @@ async fn mpu_part(State(hub): S, Path((app, binding)): Path<(String, String)>, Q
 
 async fn mpu_complete(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
-    let (_b, r2) = (bucket(&app, &binding)?, app.r2()?);
+    let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
     let id = body["uploadId"].as_str().unwrap_or_default().to_string();
     let parts: Vec<(u32, String)> = body["parts"]
         .as_array()
@@ -377,7 +387,16 @@ async fn mpu_complete(State(hub): S, Path((app, binding)): Path<(String, String)
             )
         })
         .collect();
-    Ok(Json(blocking(move || r2.complete_upload(&id, &parts)).await?))
+    let obj = blocking(move || r2.complete_upload(&id, &parts)).await?;
+    crate::r2::notify(
+        &app,
+        &hub.queues,
+        &b,
+        "CompleteMultipartUpload",
+        obj["key"].as_str().unwrap_or(""),
+        Some(&obj),
+    );
+    Ok(Json(obj))
 }
 
 async fn mpu_abort(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<StatusCode> {
@@ -607,4 +626,21 @@ async fn service_rpc(State(hub): S, Path((app, binding)): Path<(String, String)>
     let status = StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let bytes = res.bytes().await.map_err(|e| anyhow!(e))?;
     Ok((status, bytes).into_response())
+}
+
+// ---------- Analytics Engine ----------
+
+async fn analytics_write(State(hub): S, Path((app, dataset)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    if !app
+        .cfg
+        .analytics_engine_datasets
+        .iter()
+        .any(|a| a.dataset.as_deref().unwrap_or(&a.binding) == dataset)
+    {
+        return Err(not_found(&format!("Analytics Engine dataset {dataset}")));
+    }
+    let (a, points) = (hub.analytics.clone(), body["points"].as_array().cloned().unwrap_or_default());
+    let n = blocking(move || a.write(&dataset, &points)).await?;
+    Ok(Json(json!({ "written": n })))
 }

@@ -126,6 +126,57 @@ impl D1 {
     }
 }
 
+impl D1 {
+    /// 匯出成 SQL（和 wrangler d1 export 類似）：先建表、再插資料、最後索引 / 觸發器 / view
+    pub fn dump(&self, schema: bool, data: bool) -> Result<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut out = String::from("PRAGMA defer_foreign_keys=TRUE;\n");
+        let objects: Vec<(String, String, Option<String>)> = conn
+            .prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name != '_cf_KV' ORDER BY type = 'table' DESC, rowid")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (kind, name, sql) in &objects {
+            if kind != "table" {
+                continue;
+            }
+            if schema && let Some(sql) = sql {
+                out.push_str(&format!("{sql};\n"));
+            }
+            if data {
+                let mut stmt = conn.prepare(&format!("SELECT * FROM \"{}\"", name.replace('"', "\"\"")))?;
+                let n = stmt.column_count();
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    let vals: Vec<String> = (0..n)
+                        .map(|i| match row.get_ref(i) {
+                            Ok(ValueRef::Null) | Err(_) => "NULL".into(),
+                            Ok(ValueRef::Integer(v)) => v.to_string(),
+                            Ok(ValueRef::Real(v)) => format!("{v:?}"),
+                            Ok(ValueRef::Text(t)) => format!("'{}'", String::from_utf8_lossy(t).replace('\'', "''")),
+                            Ok(ValueRef::Blob(b)) => format!("X'{}'", hex::encode(b)),
+                        })
+                        .collect();
+                    out.push_str(&format!(
+                        "INSERT INTO \"{}\" VALUES({});\n",
+                        name.replace('"', "\"\""),
+                        vals.join(",")
+                    ));
+                }
+            }
+        }
+        if schema {
+            for (kind, _, sql) in &objects {
+                if kind != "table"
+                    && let Some(sql) = sql
+                {
+                    out.push_str(&format!("{sql};\n"));
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
 fn ensure_migrations_table(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS d1_migrations (

@@ -1139,6 +1139,44 @@ function makeService(binding) {
   });
 }
 
+// ---------- Hyperdrive、Analytics Engine ----------
+
+// Hyperdrive：rucloud 不做連線池，直接給資料庫的連線字串（和 wrangler dev 的 localConnectionString 一樣）
+function makeHyperdrive({ binding, connectionString }) {
+  if (!connectionString) {
+    const missing = () => { throw new Error(`Hyperdrive ${binding} 沒有設定連線字串：wrangler 設定的 localConnectionString，或 CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_${binding}`); };
+    return { get connectionString() { return missing(); } };
+  }
+  const u = new URL(connectionString);
+  return {
+    connectionString,
+    host: u.hostname,
+    port: Number(u.port) || (u.protocol.startsWith('mysql') ? 3306 : 5432),
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: decodeURIComponent(u.pathname.replace(/^\//, '')),
+  };
+}
+
+// Analytics Engine：writeDataPoint 不等待（和 Cloudflare 一樣），累積一下再一起送
+class AnalyticsEngineDataset {
+  #buf = [];
+  #timer = null;
+  constructor(dataset) { this.dataset = dataset; }
+  writeDataPoint(point = {}) {
+    const blobs = (point.blobs || []).slice(0, 20).map((b) => (b == null ? null : ArrayBuffer.isView(b) || b instanceof ArrayBuffer ? Buffer.from(b.buffer ?? b).toString() : String(b)));
+    const doubles = (point.doubles || []).slice(0, 20).map(Number);
+    const indexes = (point.indexes || []).slice(0, 1).map((i) => (i == null ? null : String(i)));
+    this.#buf.push({ blobs, doubles, index: indexes[0] ?? null, timestamp: Date.now() });
+    this.#timer ??= setTimeout(() => this.#flush(), 50);
+  }
+  #flush() {
+    const points = this.#buf.splice(0);
+    this.#timer = null;
+    if (points.length) rpc(`${B}/analytics/${enc(this.dataset)}`, { points }).catch((e) => console.error('Analytics Engine 寫入失敗：', e.message));
+  }
+}
+
 // ---------- Workflows ----------
 
 class WorkflowInstance {
@@ -1281,6 +1319,8 @@ function buildEnv() {
   for (const b of spec.ratelimits) env[b] = makeRateLimiter(b);
   for (const b of spec.services) env[b] = makeService(b);
   for (const w of spec.workflows || []) env[w.binding] = new WorkflowBinding(w.name);
+  for (const h of spec.hyperdrive || []) env[h.binding] = makeHyperdrive(h);
+  for (const a of spec.analytics || []) env[a.binding] = new AnalyticsEngineDataset(a.dataset);
   if (spec.ai) env[spec.ai] = makeAi();
   if (spec.assets) env[spec.assets] = makeAssets();
   return env;

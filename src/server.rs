@@ -63,9 +63,22 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     }
 
     let queues = Arc::new(Queues::open(&state_root.join("queues.sqlite"))?);
+    let analytics = Arc::new(crate::analytics::Analytics::open(&state_root.join("analytics.sqlite"))?);
+    {
+        let a = analytics.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(3600));
+            loop {
+                tick.tick().await;
+                let a = a.clone();
+                let _ = tokio::task::spawn_blocking(move || a.purge_old()).await;
+            }
+        });
+    }
     let hub = Arc::new(Hub {
         apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
         queues: queues.clone(),
+        analytics: analytics.clone(),
     });
     // 綁定 API 不參與優雅關閉：還在處理的請求可能需要它，程序結束時才停
     tokio::spawn(async move { axum::serve(bind_listener, bindings::router(hub)).await });
@@ -147,7 +160,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     if let Some(s3_cfg) = cfg.s3.clone() {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, s3_cfg.port).parse()?;
         let all: Vec<Arc<Slot>> = apps.iter().map(|(a, _)| a.clone()).collect();
-        let s3 = crate::s3::S3::new(s3_cfg, all);
+        let s3 = crate::s3::S3::new(s3_cfg, all, queues.clone());
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
@@ -170,6 +183,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             token: admin_cfg.token.clone(),
             draining: draining.clone(),
             deployer,
+            analytics: analytics.clone(),
         });
         let listener = tokio::net::TcpListener::bind(addr)
             .await

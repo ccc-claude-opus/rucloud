@@ -29,6 +29,24 @@ pub struct Wrangler {
     pub migrations: Vec<MigrationCfg>,
     pub rules: Vec<RuleCfg>,
     pub workflows: Vec<WorkflowCfg>,
+    pub hyperdrive: Vec<HyperdriveCfg>,
+    pub analytics_engine_datasets: Vec<AnalyticsCfg>,
+}
+
+/// Hyperdrive：rucloud 不做連線池，直接把資料庫的連線字串交給 Worker
+#[derive(Debug, Deserialize, Clone)]
+pub struct HyperdriveCfg {
+    pub binding: String,
+    /// 和 wrangler dev 相同的欄位；也可以用環境變數
+    /// CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> 或 .dev.vars 裡的同名變數
+    #[serde(rename = "localConnectionString")]
+    pub local_connection_string: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AnalyticsCfg {
+    pub binding: String,
+    pub dataset: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -60,6 +78,19 @@ pub struct KvCfg {
 pub struct R2Cfg {
     pub binding: String,
     pub bucket_name: Option<String>,
+    /// rucloud 擴充：物件變動時送訊息到佇列（Cloudflare 是用 wrangler r2 bucket notification 設定）
+    #[serde(default)]
+    pub event_notifications: Vec<R2NotificationCfg>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct R2NotificationCfg {
+    pub queue: String,
+    /// PutObject、CopyObject、CompleteMultipartUpload、DeleteObject；不給就全部
+    #[serde(default)]
+    pub actions: Vec<String>,
+    pub prefix: Option<String>,
+    pub suffix: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -89,6 +120,9 @@ pub struct QueueProducerCfg {
 #[derive(Debug, Deserialize, Clone)]
 pub struct QueueConsumerCfg {
     pub queue: String,
+    /// "http_pull"：不推給 Worker，由外部用管理埠的 pull API 取
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
     pub max_batch_size: Option<usize>,
     pub max_batch_timeout: Option<f64>,
     pub max_retries: Option<u32>,

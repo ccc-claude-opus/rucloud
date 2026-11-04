@@ -176,6 +176,14 @@ impl App {
             "ratelimits": cfg.ratelimits.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "services": cfg.services.iter().map(|s| &s.binding).collect::<Vec<_>>(),
             "workflows": cfg.workflows.iter().map(|w| json!({ "binding": w.binding, "name": w.name })).collect::<Vec<_>>(),
+            "hyperdrive": cfg.hyperdrive.iter().map(|h| {
+                let var = format!("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_{}", h.binding);
+                let conn = vars.get(&var).and_then(|v| v.as_str().map(String::from))
+                    .or_else(|| std::env::var(&var).ok())
+                    .or_else(|| h.local_connection_string.clone());
+                json!({ "binding": h.binding, "connectionString": conn })
+            }).collect::<Vec<_>>(),
+            "analytics": cfg.analytics_engine_datasets.iter().map(|a| json!({ "binding": a.binding, "dataset": a.dataset.clone().unwrap_or(a.binding.clone()) })).collect::<Vec<_>>(),
             "ai": cfg.ai.as_ref().map(|a| &a.binding),
             "assets": cfg.assets.as_ref().and_then(|a| a.binding.clone()),
             "compatibilityDate": cfg.compatibility_date,

@@ -157,8 +157,10 @@ CMD ["dev", "/srv/app", "--ip", "0.0.0.0", "--state", "/data", "--no-watch", "--
 ## 4. 發佈到 crates.io
 
 ```bash
-cargo publish --dry-run   # 檢查打包內容（含 runtime/*.mjs）
+cargo publish --dry-run --target-dir target/publish-check   # 檢查打包內容（含 runtime/*.mjs）
 cargo publish
 ```
+
+`--dry-run` 一定要加獨立的 `--target-dir`：驗證建置會編譯打包後的副本，若和平常的建置共用 `target/`，會覆蓋 fingerprint，之後 `cargo build` 不會發現原始碼改過。
 
 `Cargo.toml` 的 `include` 已經限定只打包 `src/`、`runtime/`、`README.md`、`LICENSE`。

@@ -129,6 +129,24 @@ aws --endpoint-url http://localhost:8780 s3 cp big.iso s3://my-bucket/   # 大�
 
 佇列是整個 rucloud 程序共用的，所以不同應用可以互相送訊息。
 
+**HTTP pull consumer**：`consumers: [{ "queue": "jobs", "type": "http_pull" }]` 的佇列不會推給 Worker，由外部程式從管理埠取：
+
+```bash
+curl -X POST localhost:8799/queues/jobs/messages/pull -d '{"batch_size": 10, "visibility_timeout_ms": 30000}'
+curl -X POST localhost:8799/queues/jobs/messages/ack -H 'content-type: application/json' \
+  -d '{"acks": [{"lease_id": "…"}], "retries": [{"lease_id": "…", "delay_seconds": 60}]}'
+curl -X POST localhost:8799/queues/jobs/messages -H 'content-type: application/json' -d '{"body": {"from": "outside"}}'
+```
+
+**R2 事件通知**（rucloud 擴充，Cloudflare 是用 `wrangler r2 bucket notification` 設定）：
+
+```jsonc
+"r2_buckets": [{ "binding": "FILES", "bucket_name": "uploads",
+  "event_notifications": [{ "queue": "thumbnails", "actions": ["PutObject", "CompleteMultipartUpload"], "prefix": "images/" }] }]
+```
+
+訊息內容：`{ account, action, bucket, object: { key, size, eTag }, eventTime }`。
+
 ## Cron Triggers
 
 `triggers.crons` 的 5 欄位語法，UTC。開發模式（`rucloud dev`）可以用 `curl "localhost:8787/__scheduled?cron=*+*+*+*+*"` 手動觸發。
@@ -207,6 +225,27 @@ export class OrderFlow extends WorkflowEntrypoint {
 | 狀態 | `queued`、`running`、`waiting`（sleep / 等事件）、`paused`、`complete`、`errored`、`terminated` |
 | 儲存 | `<state>/<應用>/workflows.sqlite`；rucloud 重啟後接著跑 |
 | 差異 | 重試的等待在 Worker 程序裡進行（不會跨程序重啟）；同時最多跑 16 個實例；沒有 Cloudflare 的步驟數與大小限制 |
+
+## Hyperdrive
+
+```jsonc
+"hyperdrive": [{ "binding": "HD", "id": "…", "localConnectionString": "postgres://user:pass@localhost:5432/shop" }]
+```
+
+`env.HD.connectionString`（以及拆好的 `host`、`port`、`user`、`password`、`database`）直接交給 `pg`、`postgres`、`mysql2` 等驅動。rucloud 不做連線池與查詢快取。連線字串也可以放在 `.dev.vars` 或環境變數 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HD`。
+
+## Analytics Engine
+
+```js
+env.AE.writeDataPoint({ blobs: [url.pathname, country], doubles: [ms], indexes: [userId] });
+```
+
+```bash
+rucloud analytics "SELECT blob1 AS path, COUNT(*) AS n, AVG(double1) AS ms FROM page_views WHERE timestamp > datetime('now', '-1 day') GROUP BY blob1"
+curl -X POST localhost:8799/analytics/sql -d "SELECT …"     # 管理埠
+```
+
+欄位：`timestamp`（UTC 文字，可用 SQLite 的 `datetime()`）、`index1`、`blob1`…`blob20`、`double1`…`double20`、`_sample_interval`（一律 1，不取樣）。和 Cloudflare 的差異：用 SQLite 的 SQL（不是 ClickHouse 方言）；資料保留 92 天。
 
 ## Service bindings
 

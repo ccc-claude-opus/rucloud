@@ -1,0 +1,18 @@
+// Hyperdrive、Analytics Engine、R2 事件通知、Queues 的 HTTP pull
+{
+  "name": "data",
+  "main": "src/worker.js",
+  "hyperdrive": [{ "binding": "HD", "id": "x", "localConnectionString": "postgres://user:p%40ss@db.example.com:6543/shop" }],
+  "analytics_engine_datasets": [{ "binding": "AE", "dataset": "page_views" }],
+  "kv_namespaces": [{ "binding": "KV", "id": "x" }],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "data-files", "event_notifications": [{ "queue": "r2-events", "prefix": "up/" }] }
+  ],
+  "queues": {
+    "producers": [{ "binding": "OUT", "queue": "outbox" }],
+    "consumers": [
+      { "queue": "r2-events", "max_batch_timeout": 0.2 },
+      { "queue": "outbox", "type": "http_pull" }
+    ]
+  }
+}

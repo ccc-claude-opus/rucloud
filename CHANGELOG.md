@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 0.13.0 — 資料：Hyperdrive、Analytics Engine、R2 事件、pull consumer、D1 匯出
+
+* **Hyperdrive**（`hyperdrive`）：`env.HD.connectionString`、`host`、`port`、`user`、`password`、`database`。rucloud 不做連線池，連線字串取自 `localConnectionString`、`.dev.vars` 或環境變數 `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`（和 wrangler dev 相同）。
+* **Analytics Engine**（`analytics_engine_datasets`）：`env.AE.writeDataPoint({ blobs, doubles, indexes })`，存在 `<state>/analytics.sqlite`（保留 92 天）。用 SQLite 的 SQL 查詢，每個 dataset 是一個 view：管理埠 `POST /analytics/sql`，或 `rucloud analytics "SELECT …"`。
+* **R2 事件通知**：`r2_buckets[].event_notifications = [{ queue, actions, prefix, suffix }]`（rucloud 擴充），物件新增、複製、multipart 完成、刪除時送訊息到佇列，格式和 Cloudflare 相同；binding 與 S3 API 兩條路徑都會觸發。
+* **Queues 的 HTTP pull consumer**：`consumers: [{ queue, type: "http_pull" }]` 不推給 Worker；管理埠 `POST /queues/<佇列>/messages/pull`、`/messages/ack`、`/messages`（從外部送訊息）。
+* **D1 匯出**：`rucloud d1 export <應用> <資料庫> -o dump.sql [--no-schema | --no-data]`，用 `rucloud d1 execute --file` 匯入。
+* 更正 0.10.0 的說明：之前 `cargo build` 沒有重新編譯，原因不是 nightly，而是 `cargo publish --dry-run` 的驗證建置和一般建置共用 target 資料夾、互相覆蓋了 fingerprint。發佈檢查請加 `--target-dir`（見 doc/deploy.md）。
+
 ## 0.12.0 — Workflows、service binding RPC、連出的 WebSocket
 
 * **Workflows**（wrangler 設定的 `workflows`）：`env.WF.create({ id, params })`、`get(id)`、`createBatch()`；實例的 `status()`、`pause()`、`resume()`、`terminate()`、`restart()`、`sendEvent({ type, payload })`。

@@ -74,6 +74,49 @@ impl Queues {
             .unwrap_or_default()
     }
 
+    /// HTTP pull consumer：取一批並設定可見性逾時，回傳給外部程式
+    pub fn pull(&self, queue: &str, n: usize, visibility_ms: i64) -> Result<Vec<Value>> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_ms();
+        let rows: Vec<Value> = conn
+            .prepare("SELECT id, body, content_type, attempts, created FROM messages WHERE queue = ? AND visible_at <= ? ORDER BY visible_at, created LIMIT ?")?
+            .query_map(params![queue, now, n as i64], |r| {
+                let ct: String = r.get(2)?;
+                let body: String = r.get(1)?;
+                let id: String = r.get(0)?;
+                Ok(json!({
+                    "id": id, "lease_id": id, "content_type": ct,
+                    "body": if ct == "json" { serde_json::from_str(&body).unwrap_or(Value::String(body)) } else { Value::String(body) },
+                    "attempts": r.get::<_, i64>(3)? + 1, "timestamp_ms": r.get::<_, i64>(4)?,
+                }))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        for m in &rows {
+            conn.execute(
+                "UPDATE messages SET attempts = attempts + 1, visible_at = ? WHERE id = ?",
+                params![now + visibility_ms, m["id"].as_str()],
+            )?;
+        }
+        Ok(rows)
+    }
+
+    /// HTTP pull consumer 的 ack / retry
+    pub fn ack_pulled(&self, acks: &[String], retries: &[(String, i64)]) -> Result<(usize, usize)> {
+        let conn = self.conn.lock().unwrap();
+        let mut a = 0;
+        for id in acks {
+            a += conn.execute("DELETE FROM messages WHERE id = ?", [id])?;
+        }
+        let mut r = 0;
+        for (id, delay) in retries {
+            r += conn.execute(
+                "UPDATE messages SET visible_at = ? WHERE id = ?",
+                params![now_ms() + delay * 1000, id],
+            )?;
+        }
+        Ok((a, r))
+    }
+
     /// (可取的訊息數, 最早可取的時間)
     fn ready(&self, queue: &str) -> Result<(i64, Option<i64>)> {
         let conn = self.conn.lock().unwrap();

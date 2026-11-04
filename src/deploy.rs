@@ -225,7 +225,7 @@ pub fn restart_background(slot: &Slot, app: &Arc<App>, queues: &Arc<Queues>) {
     for cron in &app.cfg.triggers.crons {
         spawn(Box::pin(crate::server::cron_loop(app.clone(), cron.clone())));
     }
-    for consumer in &app.cfg.queues.consumers {
+    for consumer in app.cfg.queues.consumers.iter().filter(|c| c.kind.as_deref() != Some("http_pull")) {
         spawn(Box::pin(queues.clone().consume(app.clone(), consumer.clone())));
     }
     if !app.cfg.durable_objects.bindings.is_empty() {

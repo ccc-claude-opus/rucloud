@@ -9,6 +9,10 @@
 //!   POST /apps/<應用>/versions/<id>/activate  切換到某個版本（rollback 也是用這個）
 //!   POST /apps/<應用>/rollback                回到上一個版本
 //!   POST /apps/<應用>/reload                  重新載入目前的版本（改了設定、密鑰之後）
+//!   POST /analytics/sql                       Analytics Engine 的 SQL 查詢（body 是 SQL）
+//!   POST /queues/<佇列>/messages              送訊息 {body, contentType?, delaySeconds?}
+//!   POST /queues/<佇列>/messages/pull         HTTP pull consumer 取訊息 {batch_size, visibility_timeout_ms}
+//!   POST /queues/<佇列>/messages/ack          {acks: [{lease_id}], retries: [{lease_id, delay_seconds}]}
 //! 有設定 token 時 /apps/* 要帶 `Authorization: Bearer <token>` 或 `?token=`。
 
 use crate::queues::Queues;
@@ -31,6 +35,7 @@ pub struct Admin {
     pub token: Option<String>,
     pub draining: Arc<AtomicBool>,
     pub deployer: Arc<crate::deploy::Deployer>,
+    pub analytics: Arc<crate::analytics::Analytics>,
 }
 
 type S = State<Arc<Admin>>;
@@ -45,6 +50,10 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/apps/{app}/rollback", post(rollback))
         .route("/apps/{app}/reload", post(reload))
         .route("/apps/{app}/cache/purge", post(purge))
+        .route("/analytics/sql", post(analytics_sql))
+        .route("/queues/{queue}/messages", post(queue_send))
+        .route("/queues/{queue}/messages/pull", post(queue_pull))
+        .route("/queues/{queue}/messages/ack", post(queue_ack))
         .layer(axum::extract::DefaultBodyLimit::max(crate::deploy::MAX_UPLOAD))
         .layer(middleware::from_fn_with_state(admin.clone(), auth));
     Router::new()
@@ -256,4 +265,64 @@ async fn purge(State(admin): S, Path(app): Path<String>, Query(q): Query<PurgeQu
         .map(|e| e.purge(q.prefix.as_deref().unwrap_or("")))
         .unwrap_or(0);
     axum::Json(json!({ "purged": n })).into_response()
+}
+
+// ---------- Analytics Engine、Queues ----------
+
+async fn analytics_sql(State(admin): S, sql: String) -> Response {
+    let a = admin.analytics.clone();
+    match tokio::task::spawn_blocking(move || a.query(&sql)).await {
+        Ok(Ok(v)) => axum::Json(v).into_response(),
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(anyhow::anyhow!(e)),
+    }
+}
+
+async fn queue_send(State(admin): S, Path(queue): Path<String>, axum::Json(body): axum::Json<serde_json::Value>) -> Response {
+    let ct = body["contentType"].as_str().unwrap_or("json").to_string();
+    let text = match (&ct[..], &body["body"]) {
+        ("json", v) => v.to_string(),
+        (_, serde_json::Value::String(s)) => s.clone(),
+        (_, v) => v.to_string(),
+    };
+    let msg = json!({ "body": text, "contentType": ct, "delaySeconds": body["delaySeconds"] });
+    let q = admin.queues.clone();
+    match tokio::task::spawn_blocking(move || q.send(&queue, &[msg])).await {
+        Ok(Ok(_)) => axum::Json(json!({ "success": true })).into_response(),
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(anyhow::anyhow!(e)),
+    }
+}
+
+async fn queue_pull(State(admin): S, Path(queue): Path<String>, body: axum::body::Bytes) -> Response {
+    let b: serde_json::Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+    let n = b["batch_size"].as_u64().unwrap_or(5).clamp(1, 100) as usize;
+    let vis = b["visibility_timeout_ms"].as_i64().unwrap_or(30_000).clamp(0, 12 * 3600 * 1000);
+    let q = admin.queues.clone();
+    match tokio::task::spawn_blocking(move || q.pull(&queue, n, vis)).await {
+        Ok(Ok(messages)) => axum::Json(json!({ "messages": messages })).into_response(),
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(anyhow::anyhow!(e)),
+    }
+}
+
+async fn queue_ack(State(admin): S, Path(_queue): Path<String>, axum::Json(b): axum::Json<serde_json::Value>) -> Response {
+    let acks: Vec<String> = b["acks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|a| a["lease_id"].as_str().map(String::from))
+        .collect();
+    let retries: Vec<(String, i64)> = b["retries"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| Some((r["lease_id"].as_str()?.to_string(), r["delay_seconds"].as_i64().unwrap_or(0))))
+        .collect();
+    let q = admin.queues.clone();
+    match tokio::task::spawn_blocking(move || q.ack_pulled(&acks, &retries)).await {
+        Ok(Ok((a, r))) => axum::Json(json!({ "ackCount": a, "retryCount": r })).into_response(),
+        Ok(Err(e)) => fail(e),
+        Err(e) => fail(anyhow::anyhow!(e)),
+    }
 }

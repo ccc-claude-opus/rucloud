@@ -59,6 +59,20 @@ pub enum D1Cmd {
         #[arg(long)]
         command: Option<String>,
     },
+    /// 匯出成 SQL 檔：rucloud d1 export <應用> <資料庫> -o backup.sql（之後可用 execute --file 匯入）
+    Export {
+        #[command(flatten)]
+        app: AppRef,
+        database: String,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// 只匯出資料
+        #[arg(long)]
+        no_schema: bool,
+        /// 只匯出結構
+        #[arg(long)]
+        no_data: bool,
+    },
     /// migrations（和 wrangler d1 migrations 相同的資料夾與紀錄表）
     Migrations {
         #[command(subcommand)]
@@ -209,6 +223,24 @@ pub fn d1(cmd: D1Cmd) -> Result<()> {
                 }
                 (None, Some(sql)) => println!("{}", serde_json::to_string_pretty(&db.query(&sql, &[])?)?),
                 _ => bail!("請給 --file 或 --command"),
+            }
+        }
+        D1Cmd::Export {
+            app,
+            database,
+            output,
+            no_schema,
+            no_data,
+        } => {
+            let r = app.resolve()?;
+            let (db, _, _) = open_d1(&r, &database)?;
+            let sql = db.dump(!no_schema, !no_data)?;
+            match output {
+                Some(f) => {
+                    std::fs::write(&f, &sql)?;
+                    eprintln!("已匯出到 {}（{} 行）", f.display(), sql.lines().count());
+                }
+                None => print!("{sql}"),
             }
         }
         D1Cmd::Migrations {
