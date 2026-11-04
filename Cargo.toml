@@ -10,7 +10,7 @@ homepage = "https://github.com/ccc-claude-opus/rucloud"
 readme = "README.md"
 keywords = ["cloudflare", "workers", "serverless", "edge", "sqlite"]
 categories = ["web-programming::http-server", "command-line-utilities", "database"]
-include = ["src/**/*", "runtime/**/*", "Cargo.toml", "README.md", "LICENSE"]
+include = ["/src/**/*", "/runtime/**/*", "/Cargo.toml", "/README.md", "/LICENSE"]
 
 [[bin]]
 name = "rucloud"
