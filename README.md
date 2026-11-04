@@ -1,17 +1,18 @@
 # rucloud
 
-**A self-hostable Cloudflare-Workers-like platform.** The Rust core handles the edge gateway, static assets and every data binding (D1 / KV / R2 / Queues / Cron / Durable Objects / Vectorize / Rate Limiting / AI Gateway). Worker JavaScript runs unmodified on Node.js. Point it at a folder with a `wrangler.jsonc` and it runs.
+**A self-hostable Cloudflare-Workers-like platform.** The Rust core handles the edge gateway (HTTP/HTTPS, WebSocket), static assets and every data binding — D1, KV, R2 (with an S3-compatible API), Queues, Cron, Durable Objects (incl. SQLite storage), Workflows, Vectorize, Analytics Engine, Rate Limiting, Workers AI and AI Gateway. Worker JavaScript/TypeScript runs unmodified on Node.js. Point it at a folder with a `wrangler.jsonc` or `wrangler.toml` and it runs.
 
 自架的 Cloudflare Workers 平台：**Rust 寫基礎建設、Node.js 跑 Worker 程式碼**。拿現成的 wrangler 專案（`wrangler.jsonc` 或 `wrangler.toml`、JS 或 TypeScript、`public/`），不改一行就能在自己的機器或 Docker 上跑。
 
 ```bash
 cargo install rucloud
-rucloud dev path/to/my-worker --d1-init DB=schema.sql     # 像 wrangler dev
-rucloud serve rucloud.toml                                  # 一個程序跑多個應用
-docker compose up --build                                   # 用 Docker 跑 test-apps
+rucloud dev path/to/my-worker --d1-migrate     # 像 wrangler dev：http://localhost:8787
+rucloud check rucloud.toml                     # 啟動前檢查設定
+rucloud serve rucloud.toml                     # 一個程序跑多個應用（正式部署）
+rucloud deploy ./my-worker -m "新版本"          # 不停機部署到執行中的 rucloud
 ```
 
-需要 Node.js 22.15 以上（建議 24）。
+需要 Node.js 22.15 以上（建議 24）。1.0 起遵守語意化版本，承諾範圍見 [doc/stability.md](doc/stability.md)。
 
 ## 架構
 
@@ -55,7 +56,7 @@ flowchart LR
 | Queues（producer + consumer、批次、retry、delay、DLQ，跨應用） | `queues` | ✓ |
 | Cron Triggers | `triggers.crons` | ✓（開發模式可 `GET /__scheduled?cron=...`） |
 | Durable Objects（`fetch`、RPC 方法、`ctx.storage`、`blockConcurrencyWhile`、alarm、WebSocket hibernation、`ctx.storage.sql`） | `durable_objects`、`migrations` | ✓ |
-| Vectorize（`upsert/insert/query/getByIds/deleteByIds`、metadata 過濾） | `vectorize` | ✓ 暴力搜尋 |
+| Vectorize（`upsert/insert/query/getByIds/deleteByIds`、metadata 過濾） | `vectorize` | ✓ 精確搜尋（10 萬筆約 13 ms） |
 | Rate Limiting binding | `ratelimits` | ✓ |
 | Service bindings（`env.OTHER.fetch`、RPC 方法、具名 entrypoint） | `services` | ✓ |
 | Workflows（`step.do` / `sleep` / `waitForEvent`，持久化、可重試） | `workflows` | ✓ |
@@ -74,14 +75,18 @@ flowchart LR
 
 | 指令 | 用途 |
 |---|---|
-| `rucloud dev [應用資料夾] --port 8787 [--env 名稱] [--instances N] [--d1-migrate] [--d1-init DB=schema.sql] [--state .rucloud]` | 開發模式，程式碼改了自動重載 |
+| `rucloud dev [應用資料夾] --port 8787 [--bind 0.0.0.0] [--env 名稱] [--instances N] [--d1-migrate] [--d1-init DB=schema.sql] [--state .rucloud]` | 開發模式，程式碼改了自動重載 |
 | `rucloud serve [rucloud.toml]` | 依設定檔同時跑多個應用（正式部署） |
+| `rucloud check [rucloud.toml \| 應用資料夾]` | 檢查設定（打錯字、找不到的檔案、重複的埠、不支援的 wrangler 欄位） |
 | `rucloud d1 execute <應用資料夾> <資料庫> --file schema.sql \| --command "SELECT …"` | 對本機 D1 執行 SQL |
+| `rucloud d1 export <應用資料夾> <資料庫> -o dump.sql` | 匯出 D1 |
 | `rucloud d1 migrations create \| list \| apply <應用資料夾> <資料庫>` | D1 migrations（同 wrangler 的格式） |
 | `rucloud kv put \| get \| list \| delete <應用資料夾> … --binding KV` | 本機 KV |
 | `rucloud r2 object put \| get \| list \| delete <應用資料夾> <bucket>/<key>` | 本機 R2 |
 | `rucloud tail <應用> [--admin http://127.0.0.1:8799] [--kind error]` | 即時看 log |
 | `rucloud deploy [資料夾] [-m 說明]`、`versions`、`rollback [--to 版本]`、`reload` | 部署新版本、版本管理（不停機） |
+| `rucloud purge <應用> [--prefix 主機/路徑]` | 清閘道快取 |
+| `rucloud analytics "SELECT …"` | 查 Analytics Engine |
 | `rucloud backup -o 檔案`、`rucloud restore 檔案` | 備份與還原所有資料 |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
@@ -125,6 +130,17 @@ node --test tests/e2e/*.test.mjs  # 只跑整合測試（先 cargo build）
 ```
 
 整合測試每個檔案會在暫存資料夾起一個真的 rucloud，跑 `examples/` 與 `tests/fixtures/` 裡的應用。CI 設定在 `.github/workflows/ci.yml`。
+
+## 文件
+
+| 文件 | 內容 |
+|---|---|
+| [doc/deploy.md](doc/deploy.md) | `rucloud.toml` 所有欄位、HTTPS、監控、部署與備份、Docker |
+| [doc/bindings.md](doc/bindings.md) | 每個 Cloudflare API 的支援程度與差異 |
+| [doc/architecture.md](doc/architecture.md) | 內部設計：閘道、Worker 程序池、綁定 API、隔離、資料存放 |
+| [doc/stability.md](doc/stability.md) | 1.x 的相容性承諾 |
+| [doc/roadmap.md](doc/roadmap.md) | 版本規劃 |
+| [CHANGELOG.md](CHANGELOG.md) | 每版的變更 |
 
 ## 授權
 

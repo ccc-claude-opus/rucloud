@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct TlsCfg {
     #[serde(default = "https_port")]
     pub port: u16,
@@ -30,6 +31,7 @@ pub struct TlsCfg {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AcmeCfg {
     pub domains: Vec<String>,
     #[serde(default)]

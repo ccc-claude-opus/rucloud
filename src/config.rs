@@ -214,6 +214,45 @@ const NON_INHERITABLE: &[&str] = &[
 /// 找應用資料夾裡的 wrangler 設定檔並解析（wrangler.jsonc / wrangler.json / wrangler.toml）。
 /// env 有給時套用 `env.<名稱>` 的設定，應用名稱變成 `<name>-<env>`。
 pub fn load_wrangler(dir: &Path, env: Option<&str>) -> Result<Wrangler> {
+    let raw = load_wrangler_value(dir, env)?;
+    serde_json::from_value(raw).with_context(|| format!("{} 的 wrangler 設定有欄位格式不對", dir.display()))
+}
+
+/// rucloud 讀得到但不支援（會被忽略）的 wrangler 欄位，和原因
+pub const UNSUPPORTED: &[(&str, &str)] = &[
+    ("routes", "rucloud 依 rucloud.toml 的 hosts / port 分派，不讀 routes"),
+    ("route", "rucloud 依 rucloud.toml 的 hosts / port 分派，不讀 route"),
+    ("compatibility_flags", "會被忽略；Node.js 相容（nodejs_compat）一律開著"),
+    (
+        "tail_consumers",
+        "不支援 Tail Workers；請用 rucloud tail 或管理埠的 /apps/<應用>/tail",
+    ),
+    ("unsafe", "不支援 unsafe 綁定"),
+    ("containers", "不支援 Containers"),
+    ("browser", "不支援 Browser Rendering"),
+    ("images", "不支援 Images"),
+    ("send_email", "不支援 Email Workers"),
+    ("dispatch_namespaces", "不支援 Workers for Platforms"),
+    ("mtls_certificates", "不支援 mTLS 憑證綁定"),
+    ("secrets_store_secrets", "不支援 Secrets Store；請用 .dev.vars 或 env_file"),
+    ("pipelines", "不支援 Pipelines"),
+    ("vpc_services", "不支援 VPC services"),
+    ("placement", "單機，Smart Placement 沒有意義"),
+    ("limits", "會被忽略；請用 rucloud.toml 的 max_block_ms、memory_mb"),
+];
+
+/// 設定裡用到、但 rucloud 不支援的欄位
+pub fn unsupported_keys(dir: &Path, env: Option<&str>) -> Vec<(&'static str, &'static str)> {
+    let Ok(raw) = load_wrangler_value(dir, env) else { return vec![] };
+    UNSUPPORTED
+        .iter()
+        .filter(|(k, _)| raw.get(*k).is_some_and(|v| !v.is_null()))
+        .copied()
+        .collect()
+}
+
+/// 讀 wrangler 設定成 JSON，並套用環境（還沒轉成 Wrangler）
+pub fn load_wrangler_value(dir: &Path, env: Option<&str>) -> Result<Value> {
     let mut raw: Value = 'found: {
         for name in ["wrangler.jsonc", "wrangler.json"] {
             let p = dir.join(name);
@@ -250,7 +289,7 @@ pub fn load_wrangler(dir: &Path, env: Option<&str>) -> Result<Wrangler> {
             top.insert("name".into(), Value::String(format!("{n}-{env}")));
         }
     }
-    serde_json::from_value(raw).with_context(|| format!("{} 的 wrangler 設定有欄位格式不對", dir.display()))
+    Ok(raw)
 }
 
 /// 讀 .dev.vars（有 env 時優先讀 .dev.vars.<env>；都沒有就讀 .env）：KEY=VALUE，# 開頭是註解，值可以用引號包起來。
@@ -294,6 +333,7 @@ pub fn parse_env(text: &str) -> BTreeMap<String, String> {
 
 /// rucloud.toml：一個程序同時跑多個應用。
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct ServeConfig {
     #[serde(default = "default_state")]
     pub state_dir: PathBuf,
@@ -321,7 +361,9 @@ pub struct ServeConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AdminCfg {
+    #[serde(default = "admin_port")]
     pub port: u16,
     /// 預設只聽 127.0.0.1
     #[serde(default = "localhost")]
@@ -330,6 +372,9 @@ pub struct AdminCfg {
     pub token: Option<String>,
 }
 
+fn admin_port() -> u16 {
+    8799
+}
 fn localhost() -> String {
     "127.0.0.1".into()
 }
@@ -338,11 +383,13 @@ fn thirty() -> u64 {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EdgeCfg {
     pub port: u16,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AppEntry {
     pub path: PathBuf,
     pub name: Option<String>,

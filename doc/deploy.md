@@ -26,6 +26,8 @@ rucloud r2 object put . my-bucket/logo.png --file logo.png
 
 ## 2. 正式：`rucloud serve rucloud.toml`
 
+先用 `rucloud check rucloud.toml` 檢查：設定檔不接受不認識的欄位（打錯字會報錯），也會檢查找不到的檔案、重複的埠、不支援的 wrangler 欄位。資料夾裡的 `VERSION` 記錄資料格式，比目前 rucloud 新的資料會拒絕啟動（見 [stability.md](stability.md)）。
+
 ```toml
 state_dir = "/var/lib/rucloud"   # 相對路徑以設定檔所在資料夾為準
 node = "node"                    # Node 執行檔
@@ -46,7 +48,7 @@ ollama = "http://localhost:11434"
 
 # 管理埠（可省略）：/health、/metrics、/apps/<應用>/logs、/apps/<應用>/tail
 [admin]
-port = 8799
+port = 8799                      # 預設 8799
 bind = "127.0.0.1"               # 預設只聽本機
 token = "換成很長的亂數"           # 可省略；設定後 /apps/* 需要驗證（health、metrics 不用）
 
@@ -64,7 +66,7 @@ compression = true               # gzip / brotli（預設開）
 
 # R2 的 S3 相容 API（可省略）
 [s3]
-port = 8780
+port = 8780                      # 預設 8780
 access_key_id = "rucloud"
 secret_access_key = "換成很長的亂數"
 
@@ -151,7 +153,7 @@ docker compose up --build
 ```dockerfile
 FROM rucloud:latest
 COPY . /srv/app
-CMD ["dev", "/srv/app", "--ip", "0.0.0.0", "--state", "/data", "--no-watch", "--instances", "4"]
+CMD ["dev", "/srv/app", "--bind", "0.0.0.0", "--state", "/data", "--no-watch", "--instances", "4"]
 ```
 
 ## 4. 發佈到 crates.io

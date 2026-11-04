@@ -32,9 +32,30 @@ fn write_runtime(state_root: &Path) -> Result<PathBuf> {
     Ok(dir.join("host.mjs").canonicalize()?)
 }
 
+/// 資料夾格式的版本：之後格式有變時用來自動轉換，或拒絕用舊版 rucloud 開新格式的資料
+pub const STATE_FORMAT: u32 = 1;
+
+fn check_state_format(state_root: &Path) -> Result<()> {
+    let f = state_root.join("VERSION");
+    match std::fs::read_to_string(&f) {
+        Ok(v) => {
+            let v: u32 = v.trim().parse().with_context(|| format!("{} 的內容不對", f.display()))?;
+            if v > STATE_FORMAT {
+                anyhow::bail!(
+                    "{} 是新版 rucloud 寫的資料（格式 {v}），這版只認得到 {STATE_FORMAT}；請升級 rucloud",
+                    state_root.display()
+                );
+            }
+        }
+        Err(_) => std::fs::write(&f, format!("{STATE_FORMAT}\n"))?,
+    }
+    Ok(())
+}
+
 pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     std::fs::create_dir_all(&cfg.state_dir)?;
     let state_root = cfg.state_dir.canonicalize()?;
+    check_state_format(&state_root)?;
     let host_js = write_runtime(&state_root)?;
 
     let bind_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

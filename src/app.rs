@@ -125,6 +125,9 @@ impl App {
             .canonicalize()
             .with_context(|| format!("找不到應用資料夾 {}", code_dir.display()))?;
         let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
+        for (key, why) in config::unsupported_keys(&dir, entry.env.as_deref()) {
+            tracing::warn!("[{name}] wrangler 設定的 {key}：{why}");
+        }
         let name = name.to_string();
         let state = ctx.state_root.join(&name);
         std::fs::create_dir_all(state.join("do-sqlite"))?;

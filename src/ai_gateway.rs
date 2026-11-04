@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Deserialize, Clone, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GatewayCfg {
     pub port: u16,
     /// 預設快取秒數，0 = 只有帶 cf-aig-cache-ttl 時才快取

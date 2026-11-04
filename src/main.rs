@@ -10,6 +10,7 @@ mod app;
 mod assets;
 mod bindings;
 mod cache;
+mod check;
 mod cli;
 mod config;
 mod d1;
@@ -50,8 +51,9 @@ enum Cmd {
         app: PathBuf,
         #[arg(long, default_value_t = 8787)]
         port: u16,
-        #[arg(long, default_value = "127.0.0.1")]
-        ip: String,
+        /// 監聽的位址（0.0.0.0 讓區網連得到）
+        #[arg(long, alias = "ip", default_value = "127.0.0.1")]
+        bind: String,
         /// Worker 程序數
         #[arg(long, default_value_t = 1)]
         instances: usize,
@@ -104,7 +106,12 @@ enum Cmd {
         #[arg(default_value = "rucloud.toml")]
         config: PathBuf,
     },
-    /// D1 資料庫操作（execute、migrations）
+    /// 檢查設定（rucloud.toml 或應用資料夾），不啟動任何東西；有錯誤時以 1 結束
+    Check {
+        #[arg(default_value = "rucloud.toml")]
+        target: PathBuf,
+    },
+    /// D1 資料庫操作（execute、export、migrations）
     D1 {
         #[command(subcommand)]
         cmd: cli::D1Cmd,
@@ -232,7 +239,7 @@ async fn main() -> Result<()> {
         Cmd::Dev {
             app,
             port,
-            ip,
+            bind,
             instances,
             state,
             d1_init,
@@ -267,7 +274,7 @@ async fn main() -> Result<()> {
             let cfg = ServeConfig {
                 state_dir: state,
                 node,
-                bind: ip,
+                bind,
                 edge: None,
                 ai_gateway: None,
                 s3,
@@ -313,6 +320,12 @@ async fn main() -> Result<()> {
             server::run(cfg, true).await
         }
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
+        Cmd::Check { target } => {
+            if !check::run(&target)? {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
         Cmd::Analytics { sql, state } => {

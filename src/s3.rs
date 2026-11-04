@@ -23,10 +23,16 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct S3Cfg {
+    #[serde(default = "s3_port")]
     pub port: u16,
     pub access_key_id: String,
     pub secret_access_key: String,
+}
+
+fn s3_port() -> u16 {
+    8780
 }
 
 pub struct S3 {

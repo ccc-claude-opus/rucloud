@@ -1,5 +1,17 @@
 # 更新紀錄
 
+## 1.0.0 — 穩定版
+
+從這版開始遵守語意化版本，承諾範圍見 [doc/stability.md](doc/stability.md)。
+
+* **設定檔嚴格檢查**：`rucloud.toml` 不再接受不認識的欄位（例如打錯字的 `instnaces`），直接報錯，不會默默沒生效。`wrangler.jsonc` / `wrangler.toml` 維持寬鬆。
+* **`rucloud check [rucloud.toml | 應用資料夾]`**：啟動前檢查設定格式、Node.js 版本、找不到的應用資料夾 / main / 靜態檔案 / env_file / d1_init、重複的埠與 host、不存在的 service binding 目標、沒有 token 卻對外開放的管理埠、缺連線字串的 Hyperdrive，以及 rucloud 不支援的 wrangler 欄位（`routes`、`compatibility_flags`、`tail_consumers`…）。有錯誤時以 1 結束。
+* 啟動時對不支援的 wrangler 欄位印出提醒。
+* **資料夾格式版本**：`state_dir` 裡寫入 `VERSION`；遇到比目前版本新的格式會拒絕啟動，避免舊版 rucloud 弄壞資料。
+* `rucloud dev` 的 `--ip` 改名為 `--bind`（和 `rucloud.toml` 的 `bind` 一致，舊名稱仍可用）。
+* `[admin]` 的 `port` 預設 8799、`[s3]` 的 `port` 預設 8780。
+* 文件：新增 doc/stability.md，README 改寫。
+
 ## 0.15.0 — AI
 
 * **Workers AI 串流**：`env.AI.run(model, { messages, stream: true })` 回傳 `ReadableStream`，內容是 Workers AI 格式的 SSE（`data: {"response":"…"}` … `data: [DONE]`），由後端的 OpenAI 格式串流轉換而來。
