@@ -187,7 +187,7 @@ for (const row of this.ctx.storage.sql.exec('SELECT * FROM messages')) { … }
 
 ## Vectorize
 
-`upsert`、`insert`、`query(vector, {topK, returnValues, returnMetadata, namespace, filter})`、`getByIds`、`deleteByIds`、`describe`。`filter` 支援 `$eq $ne $in $nin $lt $lte $gt $gte`。度量方式在 wrangler 設定裡用 rucloud 擴充欄位 `"metric": "cosine" | "euclidean" | "dot-product"`（預設 cosine）。查詢是記憶體暴力搜尋，適合幾萬筆以內。
+`upsert`、`insert`、`query(vector, {topK, returnValues, returnMetadata, namespace, filter})`、`getByIds`、`deleteByIds`、`describe`。`filter` 支援 `$eq $ne $in $nin $lt $lte $gt $gte`。度量方式在 wrangler 設定裡用 rucloud 擴充欄位 `"metric": "cosine" | "euclidean" | "dot-product"`（預設 cosine）。查詢是精確搜尋（不是近似），多執行緒掃描整個索引：10 萬筆 768 維約 13 ms（Apple Silicon）。百萬筆以上建議改用專門的向量資料庫。
 
 ## Rate Limiting
 
@@ -268,7 +268,7 @@ RPC：`env.AUTH.verify(token)` 呼叫目標應用 default export（`WorkerEntryp
 | `RUCLOUD_AI_MODEL` | 可省略；設定後忽略程式碼裡的 `@cf/...` 名稱 |
 | `RUCLOUD_AI_EMBEDDING_MODEL` | 可省略；`{text}` 輸入用的 embedding 模型 |
 
-支援 `{messages}`、`{prompt}`（回傳 `{response}`）與 `{text}`（回傳 `{shape, data}`）。不支援串流。
+支援 `{messages}`、`{prompt}`（回傳 `{response}`）與 `{text}`（回傳 `{shape, data}`）。`{ stream: true }` 回傳 SSE 的 `ReadableStream`（`data: {"response":"…"}`，最後是 `data: [DONE]`），可以直接 `new Response(stream, { headers: { 'content-type': 'text/event-stream' } })`。不支援圖片、語音模型。
 
 ## AI Gateway
 
@@ -286,5 +286,6 @@ http://localhost:8790/<gateway 名稱>/<provider>/<供應商原本的路徑>
 | 快取 | 請求帶 `cf-aig-cache-ttl: 秒數`，或設定 `cache_ttl`；`cf-aig-skip-cache: true` 跳過。串流回應（SSE）也能快取。快取鍵包含金鑰，不同使用者不會互相拿到 |
 | 限流 | `rate_limit = { limit = 60, period = 60 }`（每個 gateway 名稱） |
 | 重試 | `retries = 2`，上游 429 / 5xx / 連線失敗時退避重試 |
+| Fallback | Universal endpoint：`POST /<gateway 名稱>`，body 是 `[{ provider, endpoint, headers, query }, …]`，依序嘗試到第一個 2xx；回應標頭 `cf-aig-step` 是成功的步驟 |
 
 例：讓 mini-lang-expert 經過 AI Gateway，把 `API_URL` 換成 `http://localhost:8790/default/nvidia/v1/chat/completions`。

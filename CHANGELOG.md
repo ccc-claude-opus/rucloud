@@ -1,5 +1,11 @@
 # 更新紀錄
 
+## 0.15.0 — AI
+
+* **Workers AI 串流**：`env.AI.run(model, { messages, stream: true })` 回傳 `ReadableStream`，內容是 Workers AI 格式的 SSE（`data: {"response":"…"}` … `data: [DONE]`），由後端的 OpenAI 格式串流轉換而來。
+* **AI Gateway Universal endpoint**：`POST /<gateway>`，body 是步驟陣列 `[{ provider, endpoint, headers, query }]`，依序嘗試，第一個成功的回應直接串流回傳（`cf-aig-step` 標示是第幾步）；每一步都會記進 log。
+* **Vectorize 查詢加速**：仍是精確搜尋（結果和原本完全相同），改成多執行緒掃描、每條執行緒用 heap 留前 topK 名再合併，不再整份排序。10 萬筆 768 維從約 51 ms 降到約 13 ms（Apple Silicon，release build）。沒有過濾條件時也省掉 metadata 比對。
+
 ## 0.14.0 — 串流 HTMLRewriter、TCP socket
 
 * **HTMLRewriter 改成串流**：邊讀邊改，第一段輸出不必等整份 HTML 讀完；標籤、註解、UTF-8 字元被切在兩段之間也能正確處理。文字節點可能分成好幾次 `text()`，最後一次 `lastInTextNode` 為 `true`（和 Cloudflare 一樣）。

@@ -1102,7 +1102,13 @@ class VectorizeIndex {
 
 function makeAi() {
   return {
-    run: (model, inputs) => rpc(`${B}/ai/run`, { model, inputs }),
+    async run(model, inputs, options = {}) {
+      if (!inputs?.stream) return rpc(`${B}/ai/run`, { model, inputs });
+      // 串流：回傳 SSE 的 ReadableStream（data: {"response":"…"}），和 Workers AI 一樣
+      const res = await nativeFetch(`${B}/ai/run`, { method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify({ model, inputs }) });
+      if (!res.ok) await readJson(res);
+      return res.body;
+    },
     gateway() { throw new Error('請改用 rucloud 的 AI Gateway 端點（rucloud ai-gateway）'); },
   };
 }

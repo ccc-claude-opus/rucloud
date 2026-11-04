@@ -6,6 +6,10 @@
 //! 請求標頭：cf-aig-cache-ttl（秒，開啟快取）、cf-aig-skip-cache: true
 //! 回應標頭：cf-aig-cache-status: HIT | MISS
 //! GET /__logs?limit=50 看最近的請求記錄
+//!
+//! Universal endpoint（fallback）：POST http://<gateway>/<gateway 名稱>，body 是步驟陣列，依序嘗試，
+//! 第一個成功（2xx）的回應直接回傳，回應標頭 cf-aig-step 是成功的步驟編號：
+//!   [{ "provider": "nvidia", "endpoint": "v1/chat/completions", "headers": {...}, "query": {...} }, …]
 
 use crate::d1::open_sqlite;
 use axum::Router;
@@ -148,6 +152,9 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
     let mut seg = path.trim_start_matches('/').splitn(3, '/');
     let (gateway, provider, rest) = (seg.next().unwrap_or(""), seg.next().unwrap_or(""), seg.next().unwrap_or(""));
     let (gateway, provider) = (gateway.to_string(), provider.to_string());
+    if provider.is_empty() && req.method() == axum::http::Method::POST {
+        return universal(gw, gateway, req).await;
+    }
     let Some(base) = gw.upstream(&provider) else {
         return (StatusCode::NOT_FOUND, format!("AI Gateway：不認識的供應商 {provider:?}\n")).into_response();
     };
@@ -330,4 +337,105 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
 
 fn rest_owned(path: &str) -> &str {
     path.trim_start_matches('/').splitn(3, '/').nth(2).unwrap_or("")
+}
+
+/// Universal endpoint：依序嘗試每個步驟，回傳第一個成功的（失敗包括 4xx / 5xx / 連不上）
+async fn universal(gw: Arc<Gateway>, gateway: String, req: Request) -> Response<Body> {
+    if !gw.allow(&gateway) {
+        return (StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({ "error": "AI Gateway 限流" }))).into_response();
+    }
+    let body = match axum::body::to_bytes(req.into_body(), 32 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let Ok(Value::Array(steps)) = serde_json::from_slice::<Value>(&body) else {
+        return (StatusCode::BAD_REQUEST, axum::Json(json!({ "error": "body 要是步驟陣列" }))).into_response();
+    };
+    let mut last: Option<Response<Body>> = None;
+    for (i, step) in steps.iter().enumerate() {
+        let start = Instant::now();
+        let provider = step["provider"].as_str().unwrap_or("");
+        let endpoint = step["endpoint"].as_str().unwrap_or("").trim_start_matches('/');
+        let Some(base) = gw.upstream(provider) else {
+            last = Some((StatusCode::BAD_REQUEST, format!("AI Gateway：不認識的供應商 {provider:?}\n")).into_response());
+            continue;
+        };
+        let payload = step["query"].to_string();
+        let model = step["query"]["model"].as_str().unwrap_or("").to_string();
+        let mut rb = gw
+            .http
+            .post(format!("{}/{endpoint}", base.trim_end_matches('/')))
+            .header("content-type", "application/json");
+        for (k, v) in step["headers"].as_object().into_iter().flatten() {
+            if let Some(v) = v.as_str() {
+                rb = rb.header(k.as_str(), v);
+            }
+        }
+        match rb.body(payload.clone()).send().await {
+            Ok(res) if res.status().is_success() => {
+                gw.log(
+                    &gateway,
+                    provider,
+                    endpoint,
+                    &model,
+                    res.status().as_u16(),
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    false,
+                    payload.len(),
+                    0,
+                );
+                let mut out = Response::builder()
+                    .status(res.status().as_u16())
+                    .header("cf-aig-step", i.to_string());
+                for (k, v) in res.headers() {
+                    if !matches!(
+                        k.as_str(),
+                        "connection" | "transfer-encoding" | "content-length" | "content-encoding"
+                    ) {
+                        out = out.header(k, v);
+                    }
+                }
+                return out.body(Body::from_stream(res.bytes_stream())).unwrap();
+            }
+            Ok(res) => {
+                let status = res.status().as_u16();
+                gw.log(
+                    &gateway,
+                    provider,
+                    endpoint,
+                    &model,
+                    status,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    false,
+                    payload.len(),
+                    0,
+                );
+                tracing::warn!("AI Gateway：第 {i} 步（{provider}）回 {status}，換下一個");
+                let text = res.text().await.unwrap_or_default();
+                last = Some(
+                    Response::builder()
+                        .status(status)
+                        .header("cf-aig-step", i.to_string())
+                        .body(Body::from(text))
+                        .unwrap(),
+                );
+            }
+            Err(e) => {
+                gw.log(
+                    &gateway,
+                    provider,
+                    endpoint,
+                    &model,
+                    502,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    false,
+                    payload.len(),
+                    0,
+                );
+                tracing::warn!("AI Gateway：第 {i} 步（{provider}）連不上：{e}，換下一個");
+                last = Some((StatusCode::BAD_GATEWAY, format!("AI Gateway：連不到 {provider}：{e}\n")).into_response());
+            }
+        }
+    }
+    last.unwrap_or_else(|| (StatusCode::BAD_REQUEST, "沒有任何步驟\n").into_response())
 }

@@ -465,11 +465,14 @@ async fn vectorize(State(hub): S, Path((app, binding, op)): Path<(String, String
     Ok(Json(blocking(move || store.op(&index, &metric, &op, &body)).await?))
 }
 
-async fn ai_run(State(hub): S, Path(app): Path<String>, Json(body): Json<Value>) -> R<Json<Value>> {
+async fn ai_run(State(hub): S, Path(app): Path<String>, Json(body): Json<Value>) -> R<Response> {
     let app = hub.app(&app)?;
-    Ok(Json(
-        crate::ai::run(&app.http, body["model"].as_str().unwrap_or(""), &body["inputs"]).await?,
-    ))
+    let model = body["model"].as_str().unwrap_or("");
+    if body["inputs"]["stream"] == json!(true) {
+        let stream = crate::ai::run_stream(&app.http, model, &body["inputs"]).await?;
+        return Ok(([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(stream)).into_response());
+    }
+    Ok(Json(crate::ai::run(&app.http, model, &body["inputs"]).await?).into_response())
 }
 
 // ---------- Cache API（caches.default / caches.open），所有 Worker 程序共用 ----------

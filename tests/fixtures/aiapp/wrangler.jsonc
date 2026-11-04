@@ -1,0 +1,2 @@
+// Workers AI（轉給 OpenAI 相容的後端）的測試
+{ "name": "aiapp", "main": "src/worker.js", "ai": { "binding": "AI" } }

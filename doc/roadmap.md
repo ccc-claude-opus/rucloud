@@ -39,7 +39,7 @@
 | 0.12.0 ✓ | 執行環境 | Workflows（`step.do` / `step.sleep` / `step.waitForEvent`，進度存 SQLite，可重試、可恢復）；service binding RPC 與具名 entrypoint；Worker 主動連出的 WebSocket（`fetch` + `Upgrade`） |
 | 0.13.0 ✓ | 資料 | Hyperdrive（`connectionString` 與連線參數）；Analytics Engine（`writeDataPoint` 存 SQLite，提供 SQL 查詢 API）；R2 事件通知送進 Queues；`rucloud d1 export / import`；Queues 的 HTTP pull consumer |
 | 0.14.0 ✓ | 串流與 socket | 串流 HTMLRewriter（邊讀邊改）；`connect()` TCP socket（`cloudflare:sockets`） |
-| 0.15.0 | AI | Workers AI 串流（SSE）與 embedding / 語音轉文字轉接；Vectorize 的 HNSW 索引；AI Gateway 的 fallback 鏈與簡單的 log 檢視頁面 |
+| 0.15.0 ✓ | AI | Workers AI 串流（SSE）；AI Gateway 的 Universal endpoint（fallback）；Vectorize 精確搜尋改成多執行緒 + heap（約 4 倍快）。HNSW 等近似索引延後：精確搜尋在 10 萬筆內已經夠快，近似索引會讓結果不再精確 |
 | 1.0.0 | 穩定 | 設定檔與 CLI 定案、相容性保證、完整文件；之後的破壞性變更走 semver |
 
 ## 1.0 之後再考慮

@@ -104,20 +104,23 @@ impl VectorStore {
                 let filter = &opts["filter"];
                 let qn = norm(&q);
                 let items = self.items(index)?;
-                let mut scored: Vec<(f32, &Item)> = items
-                    .iter()
-                    .filter(|i| i.values.len() == q.len())
-                    .filter(|i| ns.is_none() || i.namespace.as_deref() == ns)
-                    .filter(|i| matches_filter(&i.metadata, filter))
-                    .map(|i| (score(metric, &q, qn, i), i))
+                let filter_empty = filter.as_object().is_none_or(|f| f.is_empty());
+                // 精確搜尋：多執行緒掃描，每條執行緒只留自己的前 topK 名，最後合併
+                let best = best_k(&items, top_k, |i: &Item| {
+                    if i.values.len() != q.len()
+                        || (ns.is_some() && i.namespace.as_deref() != ns)
+                        || (!filter_empty && !matches_filter(&i.metadata, filter))
+                    {
+                        return None;
+                    }
+                    let s = score(metric, &q, qn, i);
+                    // euclidean 越小越近，其他越大越近；排名一律用「越大越好」
+                    Some(if metric == "euclidean" { -s } else { s })
+                });
+                let matches: Vec<Value> = best
+                    .into_iter()
+                    .map(|(s, i)| item_json(&items[i], Some(if metric == "euclidean" { -s } else { s }), rv, rm))
                     .collect();
-                // euclidean 越小越近，其他越大越近
-                if metric == "euclidean" {
-                    scored.sort_by(|a, b| a.0.total_cmp(&b.0));
-                } else {
-                    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
-                }
-                let matches: Vec<Value> = scored.into_iter().take(top_k).map(|(s, i)| item_json(i, Some(s), rv, rm)).collect();
                 Ok(json!({ "count": matches.len(), "matches": matches }))
             }
             other => bail!("不支援的 Vectorize 操作 {other}"),
@@ -148,6 +151,64 @@ impl VectorStore {
         self.cache.lock().unwrap().insert(index.to_string(), items.clone());
         Ok(items)
     }
+}
+
+/// 依 rank（越大越好）取前 k 名，回傳 (rank, 索引)，由好到壞
+fn best_k(items: &[Item], k: usize, rank: impl Fn(&Item) -> Option<f32> + Sync) -> Vec<(f32, usize)> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    // 用 total_cmp 比大小（NaN 也有固定順序），四個比較 trait 要一致
+    struct R(f32);
+    impl PartialEq for R {
+        fn eq(&self, o: &Self) -> bool {
+            self.0.total_cmp(&o.0).is_eq()
+        }
+    }
+    impl Eq for R {}
+    impl PartialOrd for R {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(o))
+        }
+    }
+    impl Ord for R {
+        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&o.0)
+        }
+    }
+    let scan = |lo: usize, hi: usize| {
+        // 小頂堆：堆頂是目前留下來最差的
+        let mut heap: BinaryHeap<Reverse<(R, usize)>> = BinaryHeap::with_capacity(k + 1);
+        for (j, item) in items[lo..hi].iter().enumerate() {
+            let Some(r) = rank(item) else { continue };
+            if heap.len() < k {
+                heap.push(Reverse((R(r), lo + j)));
+            } else if heap.peek().is_some_and(|Reverse((w, _))| r > w.0) {
+                heap.pop();
+                heap.push(Reverse((R(r), lo + j)));
+            }
+        }
+        heap.into_iter().map(|Reverse((r, i))| (r.0, i)).collect::<Vec<_>>()
+    };
+    let threads = if items.len() < 4096 {
+        1
+    } else {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8)
+    };
+    let chunk = items.len().div_ceil(threads.max(1)).max(1);
+    let mut all: Vec<(f32, usize)> = if threads == 1 {
+        scan(0, items.len())
+    } else {
+        std::thread::scope(|s| {
+            let handles: Vec<_> = (0..items.len())
+                .step_by(chunk)
+                .map(|lo| s.spawn(move || scan(lo, (lo + chunk).min(items.len()))))
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        })
+    };
+    all.sort_by(|a, b| b.0.total_cmp(&a.0));
+    all.truncate(k);
+    all
 }
 
 fn norm(v: &[f32]) -> f32 {
@@ -246,6 +307,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!(r["matches"][0]["id"], "c");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod topk_tests {
+    use super::*;
+
+    #[test]
+    fn parallel_top_k_matches_full_sort() {
+        let mut seed = 7u64;
+        let items: Vec<Item> = (0..20_000)
+            .map(|i| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let v = vec![(seed >> 40) as f32, i as f32 % 13.0];
+                Item {
+                    id: i.to_string(),
+                    namespace: None,
+                    norm: norm(&v),
+                    values: v,
+                    metadata: json!({}),
+                }
+            })
+            .collect();
+        let rank = |i: &Item| {
+            if i.id.ends_with('7') {
+                None
+            } else {
+                Some(i.values[0] - i.values[1])
+            }
+        };
+        let got: Vec<usize> = best_k(&items, 25, rank).into_iter().map(|(_, i)| i).collect();
+        let mut all: Vec<(f32, usize)> = items.iter().enumerate().filter_map(|(j, i)| rank(i).map(|r| (r, j))).collect();
+        all.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let want: Vec<f32> = all.iter().take(25).map(|x| x.0).collect();
+        let got_scores: Vec<f32> = got.iter().map(|&j| rank(&items[j]).unwrap()).collect();
+        assert_eq!(got_scores, want);
+        assert!(got.iter().all(|&j| !items[j].id.ends_with('7')), "過濾掉的不能出現");
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// cargo test --release vectorize::bench -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn query_100k_768() {
+        let dir = std::env::temp_dir().join(format!("rucloud-vbench-{}", std::process::id()));
+        let s = VectorStore::open(&dir.join("v.sqlite")).unwrap();
+        let mut seed = 1u64;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f64 / (1u64 << 31) as f64) - 0.5
+        };
+        for batch in 0..100 {
+            let vectors: Vec<Value> = (0..1000)
+                .map(|i| json!({ "id": format!("v{}", batch * 1000 + i), "values": (0..768).map(|_| rnd()).collect::<Vec<_>>() }))
+                .collect();
+            s.op("i", "cosine", "upsert", &json!({ "vectors": vectors })).unwrap();
+        }
+        let q: Vec<f64> = (0..768).map(|_| rnd()).collect();
+        s.op("i", "cosine", "query", &json!({ "vector": q, "options": { "topK": 10 } }))
+            .unwrap(); // 載入快取
+        let t = std::time::Instant::now();
+        for _ in 0..10 {
+            s.op("i", "cosine", "query", &json!({ "vector": q, "options": { "topK": 10 } }))
+                .unwrap();
+        }
+        println!("100k x 768 查詢平均 {:.1} ms", t.elapsed().as_secs_f64() * 100.0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
