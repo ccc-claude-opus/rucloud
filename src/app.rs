@@ -36,6 +36,7 @@ pub struct App {
     pub metrics: Arc<crate::observe::Metrics>,
     pub logs: Arc<crate::observe::Logs>,
     pub cache: Arc<crate::cache::Caches>,
+    pub workflows: Arc<crate::workflows::Workflows>,
 }
 
 /// 建立應用時需要的共用資訊
@@ -52,6 +53,7 @@ pub struct Ctx {
 /// 跨版本不變的東西：換版時新舊 Worker 程序會同時存在一下子，token 要相同；計數與 log 也要接續
 pub struct Shared {
     pub cache: Arc<crate::cache::Caches>,
+    pub workflows: Arc<crate::workflows::Workflows>,
     pub token: String,
     pub metrics: Arc<crate::observe::Metrics>,
     pub logs: Arc<crate::observe::Logs>,
@@ -99,6 +101,7 @@ impl Slot {
         let state = ctx.state_root.join(&name);
         let shared = Shared {
             cache: Arc::new(crate::cache::Caches::new(entry.cache_mb)),
+            workflows: Arc::new(crate::workflows::Workflows::open(&state.join("workflows.sqlite"))?),
             // 每個應用一把自己的 token：Worker 只能用它存取自己的綁定
             token: format!("{:032x}", rand::random::<u128>()),
             metrics: Arc::default(),
@@ -172,6 +175,7 @@ impl App {
             "vectorize": cfg.vectorize.iter().map(|v| &v.binding).collect::<Vec<_>>(),
             "ratelimits": cfg.ratelimits.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "services": cfg.services.iter().map(|s| &s.binding).collect::<Vec<_>>(),
+            "workflows": cfg.workflows.iter().map(|w| json!({ "binding": w.binding, "name": w.name })).collect::<Vec<_>>(),
             "ai": cfg.ai.as_ref().map(|a| &a.binding),
             "assets": cfg.assets.as_ref().and_then(|a| a.binding.clone()),
             "compatibilityDate": cfg.compatibility_date,
@@ -247,6 +251,7 @@ impl App {
             metrics: shared.metrics.clone(),
             logs,
             cache: shared.cache.clone(),
+            workflows: shared.workflows.clone(),
         }))
     }
 

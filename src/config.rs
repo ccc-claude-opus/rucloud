@@ -28,6 +28,14 @@ pub struct Wrangler {
     pub services: Vec<ServiceCfg>,
     pub migrations: Vec<MigrationCfg>,
     pub rules: Vec<RuleCfg>,
+    pub workflows: Vec<WorkflowCfg>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct WorkflowCfg {
+    pub name: String,
+    pub binding: String,
+    pub class_name: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -151,6 +159,8 @@ pub struct RateLimitSimple {
 pub struct ServiceCfg {
     pub binding: String,
     pub service: String,
+    /// 具名 entrypoint（目標應用 export 的 WorkerEntrypoint 類別）；不給就是 default
+    pub entrypoint: Option<String>,
 }
 
 /// 這些設定不會從最上層繼承到 env.<名稱>（和 wrangler 一樣），環境裡沒寫就是沒有

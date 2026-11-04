@@ -1,0 +1,2 @@
+// service binding RPC 的目標：default 與具名 entrypoint
+{ "name": "calc", "main": "src/worker.js", "vars": { "NAME": "calc" } }

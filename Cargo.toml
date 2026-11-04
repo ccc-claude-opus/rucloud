@@ -1,6 +1,6 @@
 [package]
 name = "rucloud"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A self-hostable Cloudflare-Workers-like platform: Rust edge gateway + D1/KV/R2/Queues/Cron/Durable Objects/Vectorize/AI Gateway bindings, running Worker code on Node.js"

@@ -57,7 +57,8 @@ flowchart LR
 | Durable Objects（`fetch`、RPC 方法、`ctx.storage`、`blockConcurrencyWhile`、alarm、WebSocket hibernation、`ctx.storage.sql`） | `durable_objects`、`migrations` | ✓ |
 | Vectorize（`upsert/insert/query/getByIds/deleteByIds`、metadata 過濾） | `vectorize` | ✓ 暴力搜尋 |
 | Rate Limiting binding | `ratelimits` | ✓ |
-| Service bindings（`env.OTHER.fetch`） | `services` | ✓ |
+| Service bindings（`env.OTHER.fetch`、RPC 方法、具名 entrypoint） | `services` | ✓ |
+| Workflows（`step.do` / `sleep` / `waitForEvent`，持久化、可重試） | `workflows` | ✓ |
 | Workers AI（`env.AI.run`） | `ai` | ✓ 轉給 OpenAI 相容後端 |
 | AI Gateway（log、快取、限流、重試） | `rucloud.toml` 的 `[ai_gateway]` | ✓ |
 | HTTPS（自備憑證、ACME 自動申請）、gzip / brotli、回應快取 | `rucloud.toml` 的 `[tls]`、`cache_mb` | ✓ |

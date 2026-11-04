@@ -37,7 +37,8 @@ return new Response(null, { status: 101, webSocket: client });
 * 閘道把 upgrade 請求用原始 TCP 轉給 Worker 程序，101 之後位元組直接對接；WebSocket 訊框由 Node 端的 rucloud 執行環境處理（文字、二進位、分段、ping/pong、close）。
 * 轉給 Durable Object（`return stub.fetch(request)`）或 service binding 時，跨程序同樣是位元組對接，不會多一層解碼。
 * 101 送出前 `send()` 的訊息會先排隊，連線接上後依序送出。
-* 單則訊息上限 32 MB。不支援 `permessage-deflate` 壓縮，也不支援 Worker 主動連出去的 `fetch()` upgrade（請改用 Node 內建的 `WebSocket` 客戶端）。
+* 單則訊息上限 32 MB。不支援 `permessage-deflate` 壓縮。
+* Worker 主動連出：`const ws = (await fetch(url, { headers: { Upgrade: 'websocket' } })).webSocket; ws.accept();`（用 Node 內建的 WebSocket 客戶端，`Sec-WebSocket-Protocol` 以外的自訂標頭不會送出）。
 
 ## HTMLRewriter
 
@@ -178,13 +179,44 @@ for (const row of this.ctx.storage.sql.exec('SELECT * FROM messages')) { … }
 
 `await env.LIMITER.limit({ key })` → `{ success }`。固定窗口，計數在 Rust（多個 Worker 程序共用）。
 
+## Workflows
+
+```jsonc
+"workflows": [{ "name": "orders", "binding": "ORDERS", "class_name": "OrderFlow" }]
+```
+
+```js
+import { WorkflowEntrypoint } from 'cloudflare:workers';
+import { NonRetryableError } from 'cloudflare:workflows';
+
+export class OrderFlow extends WorkflowEntrypoint {
+  async run(event, step) {
+    const charge = await step.do('charge', { retries: { limit: 3, delay: '5 seconds', backoff: 'exponential' } }, () => pay(event.payload));
+    await step.sleep('cool down', '1 hour');
+    const ok = await step.waitForEvent('approval', { type: 'approve', timeout: '1 day' });
+    return step.do('ship', () => ship(ok.payload));
+  }
+}
+// const inst = await env.ORDERS.create({ params: { amount: 100 } }); await inst.status();
+```
+
+| 項目 | 說明 |
+|---|---|
+| 執行方式 | 重播：每次喚醒從頭跑 `run()`，已完成的 `step.do` 直接回傳存好的結果，所以 `step.do` 以外的程式碼要能重複執行 |
+| 步驟名稱 | 同名的步驟依出現順序編號，順序要固定（和 Cloudflare 一樣） |
+| 狀態 | `queued`、`running`、`waiting`（sleep / 等事件）、`paused`、`complete`、`errored`、`terminated` |
+| 儲存 | `<state>/<應用>/workflows.sqlite`；rucloud 重啟後接著跑 |
+| 差異 | 重試的等待在 Worker 程序裡進行（不會跨程序重啟）；同時最多跑 16 個實例；沒有 Cloudflare 的步驟數與大小限制 |
+
 ## Service bindings
 
 ```jsonc
 "services": [{ "binding": "AUTH", "service": "auth-worker" }]
 ```
 
-`env.AUTH.fetch(request)` 會進到同一個 rucloud 裡名叫 `auth-worker` 的應用（含它的靜態檔案）。不支援 RPC 方法。
+`env.AUTH.fetch(request)` 會進到同一個 rucloud 裡名叫 `auth-worker` 的應用（含它的靜態檔案）。
+
+RPC：`env.AUTH.verify(token)` 呼叫目標應用 default export（`WorkerEntrypoint` 類別或物件）的方法；`{ "binding": "ADMIN", "service": "auth-worker", "entrypoint": "Admin" }` 呼叫具名 entrypoint。參數與回傳值用 rucloud 的結構化序列化（支援 Date、Map、Set、位元組、BigInt），不支援傳函式或 stub。`fetch()` 一律進 default export。
 
 ## Workers AI
 

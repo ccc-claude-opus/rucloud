@@ -30,3 +30,11 @@ export class WorkflowEntrypoint {
 }
 
 export class RpcTarget {}
+
+// cloudflare:workflows：step.do 裡丟這個錯誤就不重試
+export class NonRetryableError extends Error {
+  constructor(message, name = 'NonRetryableError') {
+    super(message);
+    this.name = name;
+  }
+}

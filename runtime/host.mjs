@@ -49,7 +49,7 @@ const EXTENSIONS = ['.ts', '.js', '.mjs', '.mts', '.tsx', '.jsx', '/index.ts', '
 
 registerHooks({
   resolve(specifier, context, next) {
-    if (specifier === 'cloudflare:workers') {
+    if (specifier === 'cloudflare:workers' || specifier === 'cloudflare:workflows') {
       return { url: new URL('./cloudflare-workers.mjs', import.meta.url).href, shortCircuit: true };
     }
     try {
@@ -1109,7 +1109,7 @@ function makeRateLimiter(binding) {
 }
 
 function makeService(binding) {
-  return {
+  const target = {
     async fetch(input, init) {
       const req = new Request(input, init);
       if (isUpgrade(req)) return upgradeVia(`/b/${enc(spec.app)}/service/${enc(binding)}`, req, { 'x-rucloud-svc-url': req.url });
@@ -1121,6 +1121,141 @@ function makeService(binding) {
     },
     connect() { throw new Error('rucloud 不支援 service binding 的 connect()'); },
   };
+  return new Proxy(target, {
+    get(t, prop) {
+      if (prop in t) return t[prop];
+      if (typeof prop === 'symbol' || prop === 'then') return undefined;
+      return async (...args) => {
+        const res = await nativeFetch(`${B}/service/${enc(binding)}/rpc`, {
+          method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: ser({ method: prop, args }),
+        });
+        const text = await res.text();
+        let data;
+        try { data = deser(text); } catch { throw new Error(text); }
+        if (!res.ok || data?.$error) throw new Error(data?.$error || text);
+        return data.result;
+      };
+    },
+  });
+}
+
+// ---------- Workflows ----------
+
+class WorkflowInstance {
+  constructor(name, id) { this._name = name; this.id = id; }
+  _op(op, extra = {}) { return rpc(`${B}/workflow/${enc(this._name)}`, { op, id: this.id, ...extra }); }
+  status() { return this._op('status'); }
+  async pause() { await this._op('pause'); }
+  async resume() { await this._op('resume'); }
+  async terminate() { await this._op('terminate'); }
+  async restart() { await this._op('restart'); }
+  async sendEvent({ type, payload }) { await this._op('sendEvent', { type, payload: payload ?? null }); }
+}
+
+class WorkflowBinding {
+  constructor(name) { this._name = name; }
+  async create(options = {}) {
+    const { id } = await rpc(`${B}/workflow/${enc(this._name)}`, { op: 'create', id: options.id, params: options.params ?? {} });
+    return new WorkflowInstance(this._name, id);
+  }
+  async createBatch(list) { return Promise.all(list.map((o) => this.create(o))); }
+  async get(id) {
+    const { exists } = await rpc(`${B}/workflow/${enc(this._name)}`, { op: 'exists', id });
+    if (!exists) throw new Error(`找不到 Workflow 實例 ${id}`);
+    return new WorkflowInstance(this._name, id);
+  }
+}
+
+// "10 seconds"、"1 minute"、"2 hours"、"500 ms" 或毫秒數
+function parseDuration(d) {
+  if (typeof d === 'number') return d;
+  const m = /^\s*([\d.]+)\s*(ms|millisecond|second|minute|hour|day|week)s?\s*$/i.exec(String(d));
+  if (!m) throw new TypeError(`看不懂的時間長度：${d}`);
+  const unit = { ms: 1, millisecond: 1, second: 1000, minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000 }[m[2].toLowerCase()];
+  return Number(m[1]) * unit;
+}
+
+class Suspend {
+  constructor(result) { this.result = result; }
+}
+
+// 重播執行 run(event, step)：已完成的步驟直接回傳存好的結果
+async function runWorkflow(snap) {
+  const Cls = workerModule[snap.className];
+  if (typeof Cls !== 'function') return { status: 'errored', error: `Workflow 類別 ${snap.className} 沒有從 main 模組 export` };
+  const ctx = makeCtx();
+  const instance = new Cls(ctx, env);
+  const steps = snap.steps;
+  const counts = new Map();
+  const unique = (kind, name) => {
+    const k = `${kind}:${name}`;
+    const n = (counts.get(k) || 0) + 1;
+    counts.set(k, n);
+    return n === 1 ? k : `${k}#${n}`;
+  };
+  const persist = (name, result) => rpc(`${B}/workflow/${enc(snap.workflow)}`, { op: 'step', id: snap.id, name, result });
+  const consumed = new Map();
+  const step = {
+    async do(name, config, fn) {
+      if (typeof config === 'function') { fn = config; config = {}; }
+      const key = unique('do', name);
+      if (key in steps) return deser(steps[key].value);
+      const limit = config.retries?.limit ?? 5;
+      const delay = parseDuration(config.retries?.delay ?? 1000);
+      const backoff = config.retries?.backoff ?? 'exponential';
+      const timeout = parseDuration(config.timeout ?? '10 minutes');
+      for (let attempt = 0; ; attempt++) {
+        try {
+          let timer;
+          const value = await Promise.race([
+            Promise.resolve().then(fn),
+            new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`step ${name} 逾時`)), timeout); }),
+          ]).finally(() => clearTimeout(timer));
+          await persist(key, { value: ser(value) });
+          return value;
+        } catch (e) {
+          if (e?.name === 'NonRetryableError' || attempt >= limit) throw e;
+          const factor = backoff === 'exponential' ? 2 ** attempt : backoff === 'linear' ? attempt + 1 : 1;
+          await new Promise((r) => setTimeout(r, delay * factor));
+        }
+      }
+    },
+    async sleep(name, duration) {
+      return step.sleepUntil(name, Date.now() + parseDuration(duration), unique('sleep', name));
+    },
+    async sleepUntil(name, when, key = unique('sleepUntil', name)) {
+      let rec = steps[key];
+      if (!rec) {
+        rec = { until: when instanceof Date ? when.getTime() : Number(when) };
+        await persist(key, rec);
+      }
+      if (Date.now() >= rec.until) return;
+      throw new Suspend({ status: 'sleeping', wakeAt: rec.until });
+    },
+    async waitForEvent(name, { type, timeout = '24 hours' } = {}) {
+      const key = unique('wait', name);
+      const idx = consumed.get(type) || 0;
+      consumed.set(type, idx + 1);
+      const ev = snap.events.filter((e) => e.type === type)[idx];
+      if (ev) return { type, payload: ev.payload, timestamp: new Date() };
+      let rec = steps[key];
+      if (!rec) {
+        rec = { until: Date.now() + parseDuration(timeout) };
+        await persist(key, rec);
+      }
+      if (Date.now() >= rec.until) throw new Error(`waitForEvent 逾時：${type}`);
+      throw new Suspend({ status: 'waiting', wakeAt: rec.until, eventType: type });
+    },
+  };
+  try {
+    const output = await instance.run({ payload: snap.params, timestamp: new Date(snap.timestamp), instanceId: snap.id }, step);
+    await ctx._drain();
+    return { status: 'complete', output: output === undefined ? null : output };
+  } catch (e) {
+    if (e instanceof Suspend) return e.result;
+    console.error(`Workflow ${snap.workflow}/${snap.id} 失敗：`, e?.stack || e);
+    return { status: 'errored', error: String(e?.message || e) };
+  }
 }
 
 function makeAssets() {
@@ -1145,6 +1280,7 @@ function buildEnv() {
   for (const b of spec.vectorize) env[b] = new VectorizeIndex(b);
   for (const b of spec.ratelimits) env[b] = makeRateLimiter(b);
   for (const b of spec.services) env[b] = makeService(b);
+  for (const w of spec.workflows || []) env[w.binding] = new WorkflowBinding(w.name);
   if (spec.ai) env[spec.ai] = makeAi();
   if (spec.assets) env[spec.assets] = makeAssets();
   return env;
@@ -1189,6 +1325,29 @@ globalThis.caches = {
 };
 globalThis.HTMLRewriter = HTMLRewriter;
 globalThis.scheduler ??= { wait: (ms) => new Promise((r) => setTimeout(r, ms)) };
+
+// Worker 主動連出的 WebSocket：fetch(url, { headers: { Upgrade: 'websocket' } }) 回傳 response.webSocket
+globalThis.fetch = async function fetch(input, init) {
+  const req = new Request(input, init);
+  if (!isUpgrade(req)) return nativeFetch(input, init);
+  const url = new URL(req.url);
+  url.protocol = url.protocol === 'https:' || url.protocol === 'wss:' ? 'wss:' : 'ws:';
+  const protocols = (req.headers.get('sec-websocket-protocol') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url.href, protocols);
+    ws.binaryType = 'arraybuffer';
+    const local = new CfWebSocket();
+    local._peer = { _transport: { send: (d) => ws.send(d), close: (c, r) => ws.close(c, r) } };
+    let opened = false;
+    ws.onopen = () => { opened = true; local.protocol = ws.protocol; resolve(new Response(null, { status: 101, webSocket: local })); };
+    ws.onmessage = (e) => local._dispatch('message', { data: e.data });
+    ws.onclose = (e) => {
+      if (!opened) return reject(new Error(`WebSocket 連不上 ${url.href}`));
+      local._closed(e.code, e.reason, e.wasClean);
+    };
+    ws.onerror = () => { if (opened) local._dispatch('error', { error: new Error('WebSocket 錯誤'), message: 'WebSocket 錯誤' }); };
+  });
+};
 
 const listeners = { fetch: [], scheduled: [], queue: [] };
 globalThis.addEventListener = (type, fn) => listeners[type]?.push(fn);
@@ -1319,6 +1478,32 @@ async function handleFetch(req, res) {
 async function handleInternal(kind, req, res) {
   if (req.headers['x-rucloud-token'] !== spec.token) return sendJson(res, 403, { error: 'forbidden' });
   if (kind === 'ping') return sendJson(res, 200, { ok: true });
+  if (kind === 'workflow') {
+    try {
+      return sendJson(res, 200, await runWorkflow(JSON.parse(await readBody(req))));
+    } catch (e) {
+      return sendJson(res, 500, { error: String(e?.message || e) });
+    }
+  }
+  if (kind === 'rpc') {
+    // service binding 的 RPC：呼叫 default export（或具名 entrypoint）的方法
+    try {
+      const { method, args } = deser(await readBody(req));
+      const epName = req.headers['x-rucloud-entrypoint'];
+      const ep = epName ? workerModule[epName] : entry;
+      if (!ep) throw new Error(`沒有 export ${epName}`);
+      if (method === 'constructor' || String(method).startsWith('_')) throw new Error(`不能呼叫 ${method}`);
+      const ctx = makeCtx();
+      const target = typeof ep === 'function' ? new ep(ctx, env) : ep;
+      const fn = target[method];
+      if (typeof fn !== 'function') throw new Error(`${epName || 'default'} 沒有方法 ${method}()`);
+      const result = await fn.apply(target, args);
+      ctx._drain();
+      return sendJson(res, 200, ser({ result }));
+    } catch (e) {
+      return sendJson(res, 500, ser({ $error: String(e?.message || e) }));
+    }
+  }
   try {
     if (kind === 'queue') {
       const payload = JSON.parse(await readBody(req));

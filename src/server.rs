@@ -107,6 +107,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             tracing::info!("[{}] http://{shown}:{port}  ({})", slot.name, app.dir.display());
         }
         crate::deploy::restart_background(slot, &app, &queues);
+        tokio::spawn(crate::workflows::run_loop(slot.clone(), slot.shared.workflows.clone()));
     }
     let edge_router = compressed(
         Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes)),

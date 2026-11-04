@@ -1,0 +1,13 @@
+// Workflows、service binding RPC、主動連出的 WebSocket
+{
+  "name": "flows",
+  "main": "src/worker.js",
+  "workflows": [
+    { "name": "orders", "binding": "ORDERS", "class_name": "OrderFlow" },
+    { "name": "fails", "binding": "FAILS", "class_name": "FailFlow" }
+  ],
+  "services": [
+    { "binding": "CALC", "service": "calc" },
+    { "binding": "CALC_ADMIN", "service": "calc", "entrypoint": "Admin" }
+  ]
+}

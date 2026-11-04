@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 0.12.0 — Workflows、service binding RPC、連出的 WebSocket
+
+* **Workflows**（wrangler 設定的 `workflows`）：`env.WF.create({ id, params })`、`get(id)`、`createBatch()`；實例的 `status()`、`pause()`、`resume()`、`terminate()`、`restart()`、`sendEvent({ type, payload })`。
+  * `step.do(name, [config], fn)`：結果存進 SQLite，可設定 `retries`（`limit`、`delay`、`backoff`）與 `timeout`；`NonRetryableError`（`cloudflare:workflows`）不重試。
+  * `step.sleep`、`step.sleepUntil`、`step.waitForEvent({ type, timeout })`：暫停時不佔用 Worker，到時間或事件進來再喚醒。
+  * 用「重播」執行：每次喚醒從頭跑 `run()`，已完成的步驟直接回傳存好的結果。rucloud 重啟後會接著跑。
+* **service binding RPC**：`env.SVC.method(...args)` 呼叫目標應用的 `WorkerEntrypoint` 方法（參數、回傳值支援 Date、Map、Set、位元組等）；`entrypoint` 指定具名的 entrypoint。
+* **Worker 主動連出的 WebSocket**：`fetch(url, { headers: { Upgrade: 'websocket' } })` 回傳 `response.webSocket`。
+
 ## 0.11.0 — HTTPS、快取、壓縮
 
 * **HTTPS**（`[tls]`）：自備憑證（`cert` + `key`，PEM），或 ACME 自動申請與續期（`acme = { domains = [...], email = [...] }`，Let's Encrypt，TLS-ALPN-01 驗證，只需要 443 埠）。和 edge 一樣依 Host 分派，支援 HTTP/2；Worker 看到的 `request.url` 是 `https://`。`redirect_http = true` 讓 edge 的 HTTP 埠全部 308 轉址到 HTTPS。開發時可以用 `rucloud dev --tls-cert --tls-key`。

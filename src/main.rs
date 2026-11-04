@@ -24,6 +24,7 @@ mod s3;
 mod server;
 mod tls;
 mod vectorize;
+mod workflows;
 mod ws;
 
 use anyhow::{Context, Result};

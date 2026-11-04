@@ -81,6 +81,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/assets", any(assets))
         .route("/b/{app}/cache/{name}", get(cache_get).put(cache_put).delete(cache_delete))
         .route("/b/{app}/service/{binding}", any(service))
+        .route("/b/{app}/service/{binding}/rpc", post(service_rpc))
+        .route("/b/{app}/workflow/{name}", post(workflow))
         .layer(middleware::from_fn_with_state(hub.clone(), auth))
         .layer(DefaultBodyLimit::disable())
         .with_state(hub)
@@ -567,4 +569,42 @@ async fn service(State(hub): S, Path((app, binding)): Path<(String, String)>, mu
     h.remove("x-rucloud-svc-url");
     h.insert(header::HOST, HeaderValue::from_str(&host).map_err(|e| anyhow!(e))?);
     Ok(crate::gateway::handle(&target, req, ([127, 0, 0, 1], 0).into()).await)
+}
+
+// ---------- Workflows ----------
+
+async fn workflow(State(hub): S, Path((app, name)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    if !app.cfg.workflows.iter().any(|w| w.name == name) {
+        return Err(not_found(&format!("Workflow {name}")));
+    }
+    let wfs = app.workflows.clone();
+    Ok(Json(blocking(move || wfs.op(&name, &body)).await?))
+}
+
+/// env.SVC.method(...)：呼叫另一個應用的 WorkerEntrypoint 方法。參數與回傳值由 JS 端序列化，這裡原樣轉送
+async fn service_rpc(State(hub): S, Path((app, binding)): Path<(String, String)>, body: Bytes) -> R<Response> {
+    let app = hub.app(&app)?;
+    let svc = app
+        .cfg
+        .services
+        .iter()
+        .find(|s| s.binding == binding)
+        .ok_or_else(|| not_found(&format!("service 綁定 {binding}")))?;
+    let target = hub.app(&svc.service)?;
+    let pool = target.pool.as_ref().ok_or_else(|| anyhow!("{} 沒有 Worker", target.name))?;
+    let port = pool.port(None).await?;
+    let mut rb = target
+        .http
+        .post(format!("http://127.0.0.1:{port}/__rucloud/rpc"))
+        .header("x-rucloud-kind", "rpc")
+        .header("x-rucloud-token", &target.token)
+        .body(body);
+    if let Some(ep) = &svc.entrypoint {
+        rb = rb.header("x-rucloud-entrypoint", ep);
+    }
+    let res = rb.send().await.map_err(|e| anyhow!(e))?;
+    let status = StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let bytes = res.bytes().await.map_err(|e| anyhow!(e))?;
+    Ok((status, bytes).into_response())
 }
