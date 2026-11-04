@@ -121,6 +121,30 @@ rucloud reload myshop                     # 改了 .dev.vars / env_file 之後
 * 切換不停機：新版本的 Worker 全部起來才換上；起不來就維持原本的版本並回報錯誤。
 * 換版的瞬間新舊程序會短暫並存：同一個 Durable Object 在舊程序裡還沒做完的事件，可能和新程序的事件重疊。
 
+### 持續複寫（建議正式環境開啟）
+
+```toml
+[replicate]
+target = "s3://my-backups/rucloud/prod"        # 或 "file:///mnt/nas/rucloud"
+endpoint = "https://<帳號>.r2.cloudflarestorage.com"   # AWS S3 可省略
+region = "auto"
+access_key_id = "…"
+secret_access_key = "…"
+interval = 10                                   # 秒：多久檢查一次變動
+keep = 48                                       # 每個資料庫保留幾份快照
+```
+
+機器壞了，在另一台機器上：
+
+```bash
+rucloud replica status --config rucloud.toml
+rucloud replica restore --config rucloud.toml                         # 最新的
+rucloud replica restore --config rucloud.toml --at 2026-11-05T10:00:00Z  # 某個時間點（例如誤刪資料之前）
+rucloud serve rucloud.toml
+```
+
+最多遺失最後一個 `interval` 的寫入；各資料庫分別快照（不是同一瞬間）；資料庫很大（幾 GB）時每次都送整份，請把 `interval` 調大。
+
 ### 備份
 
 ```bash

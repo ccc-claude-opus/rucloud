@@ -92,6 +92,7 @@ flowchart LR
 | `rucloud purge <應用> [--prefix 主機/路徑]` | 清閘道快取 |
 | `rucloud analytics "SELECT …"` | 查 Analytics Engine |
 | `rucloud backup -o 檔案`、`rucloud restore 檔案` | 備份與還原所有資料 |
+| `rucloud replica status \| restore [--at 時間]` | 持續複寫（`[replicate]`）的狀態與還原 |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
 `rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。

@@ -23,6 +23,7 @@ mod observe;
 mod pool;
 mod queues;
 mod r2;
+mod replicate;
 mod s3;
 mod server;
 mod tls;
@@ -225,6 +226,11 @@ enum Cmd {
         #[arg(long, default_value = ".rucloud")]
         state: PathBuf,
     },
+    /// 持續複寫（rucloud.toml 的 [replicate]）：看狀態、還原
+    Replica {
+        #[command(subcommand)]
+        cmd: ReplicaCmd,
+    },
     /// 備份整個資料夾（D1、KV、R2、Durable Objects、佇列、部署的版本）；執行中也可以
     Backup {
         #[arg(long, default_value = ".rucloud")]
@@ -255,6 +261,28 @@ enum Cmd {
         cache_ttl: u64,
         #[arg(long, default_value_t = 2)]
         retries: u32,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReplicaCmd {
+    /// 列出遠端的快照與檔案
+    Status {
+        #[arg(long, default_value = "rucloud.toml")]
+        config: PathBuf,
+    },
+    /// 從遠端還原到 state 資料夾（請先停掉 rucloud）
+    Restore {
+        #[arg(long, default_value = "rucloud.toml")]
+        config: PathBuf,
+        /// 還原到哪個資料夾（預設用設定檔的 state_dir）
+        #[arg(long)]
+        state: Option<PathBuf>,
+        /// 還原到這個時間點之前最新的快照（RFC 3339，例如 2026-11-05T10:00:00Z）
+        #[arg(long)]
+        at: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -314,6 +342,7 @@ async fn main() -> Result<()> {
                 }),
                 shutdown_timeout: 10,
                 compression: true,
+                replicate: None,
                 tls: match (tls_cert, tls_key) {
                     (Some(cert), Some(key)) => Some(tls::TlsCfg {
                         port: tls_port,
@@ -377,6 +406,22 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Purge { app, prefix, admin } => cli::purge(&app, prefix.as_deref(), &admin).await,
+        Cmd::Replica { cmd } => {
+            let (config, state, at, force, restore) = match cmd {
+                ReplicaCmd::Status { config } => (config, None, None, false, false),
+                ReplicaCmd::Restore { config, state, at, force } => (config, state, at, force, true),
+            };
+            let c = config::load_serve_config(&config)?;
+            let r = c
+                .replicate
+                .clone()
+                .with_context(|| format!("{} 沒有 [replicate]", config.display()))?;
+            if restore {
+                replicate::restore(&r, &state.unwrap_or(c.state_dir), at.as_deref(), force).await
+            } else {
+                replicate::status(&r).await
+            }
+        }
         Cmd::Backup { state, out, with_logs } => cli::backup(&state, &out, with_logs),
         Cmd::Restore { archive, state, force } => cli::restore(&archive, &state, force),
         Cmd::Deploy {

@@ -139,6 +139,16 @@ fn check_ports(cfg: &ServeConfig, r: &mut Report) {
             r.warn("[s3] secret_access_key 太短");
         }
     }
+    if let Some(rp) = &cfg.replicate {
+        match crate::replicate::Remote::new(rp) {
+            Ok(_) if rp.interval == 0 => r.err("[replicate] interval 要大於 0"),
+            Ok(_) => r.ok(&format!(
+                "持續複寫到 {}（每 {} 秒，保留 {} 份快照）",
+                rp.target, rp.interval, rp.keep
+            )),
+            Err(e) => r.err(&format!("{e:#}")),
+        }
+    }
     if let Some(g) = &cfg.ai_gateway {
         add(g.port, "ai_gateway".into());
     }

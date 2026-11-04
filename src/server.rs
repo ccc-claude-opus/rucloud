@@ -216,6 +216,11 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         tracing::info!("管理埠：http://{addr}（/health、/metrics、/apps/<應用>/tail）");
     }
 
+    let replica = cfg
+        .replicate
+        .clone()
+        .map(|r| tokio::spawn(crate::replicate::run_loop(state_root.clone(), r, shutdown.clone())));
+
     wait_for_signal().await;
     tracing::info!("收到結束訊號：停止接受新請求，最多等 {} 秒讓進行中的請求做完", cfg.shutdown_timeout);
     draining.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -230,6 +235,12 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             pool.stop();
         }
         slot.shared.logs.flush();
+    }
+    // 最後一輪複寫（把關閉前的寫入也送出去）
+    if let Some(r) = replica
+        && tokio::time::timeout(Duration::from_secs(cfg.shutdown_timeout), r).await.is_err()
+    {
+        tracing::warn!("最後一輪複寫沒在時間內完成");
     }
     // 讓 Worker 程序有時間收到 kill
     tokio::time::sleep(Duration::from_millis(200)).await;

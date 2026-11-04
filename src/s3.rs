@@ -155,7 +155,7 @@ fn unesc(s: &str) -> String {
 }
 
 /// SigV4 用的 URI 編碼：除了 A-Z a-z 0-9 - _ . ~ 以外全部編碼
-fn uri_encode(s: &str, keep_slash: bool) -> String {
+pub(crate) fn uri_encode(s: &str, keep_slash: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') || (keep_slash && b == b'/') {
@@ -184,7 +184,7 @@ fn parse_query(q: Option<&str>) -> Vec<(String, String)> {
         .collect()
 }
 
-fn hmac(key: &[u8], data: &str) -> Vec<u8> {
+pub(crate) fn hmac(key: &[u8], data: &str) -> Vec<u8> {
     let mut m = Hmac::<Sha256>::new_from_slice(key).expect("HMAC 可以用任何長度的金鑰");
     m.update(data.as_bytes());
     m.finalize().into_bytes().to_vec()

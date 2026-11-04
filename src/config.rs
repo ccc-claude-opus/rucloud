@@ -350,6 +350,8 @@ pub struct ServeConfig {
     pub admin: Option<AdminCfg>,
     /// HTTPS（自備憑證或 ACME）
     pub tls: Option<crate::tls::TlsCfg>,
+    /// 持續複寫到 S3 相容儲存或另一個資料夾
+    pub replicate: Option<crate::replicate::ReplicateCfg>,
     /// 回應壓縮（gzip、brotli）
     #[serde(default = "yes")]
     pub compression: bool,

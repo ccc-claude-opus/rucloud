@@ -1,5 +1,15 @@
 # 更新紀錄
 
+## 1.3.0 — 持續複寫
+
+* **`[replicate]`**：把整個 `state_dir` 持續送到 S3 相容儲存（R2、AWS S3、MinIO，或另一台 rucloud 的 S3 API）或另一個資料夾（`file:///…`，例如 NAS）。
+  * SQLite（D1、KV、Durable Objects、佇列、Workflows…）：每 `interval` 秒（預設 10）對有變動的資料庫做線上快照並 gzip，保留最近 `keep` 份（預設 48）。
+  * 其他檔案（R2 物件、部署的版本）：有變動就上傳，本機刪掉的遠端也刪；大檔案直接串流上傳。
+  * 關閉時會再送最後一輪。
+* **`rucloud replica restore [--at 時間]`**：從遠端還原到新的資料夾；`--at` 還原到某個時間點之前最新的快照。`rucloud replica status` 看遠端的狀態。
+* `rucloud check` 會檢查 `[replicate]` 的設定。
+* 和 Litestream 的差異：不是逐筆送 WAL，最多遺失最後一個 interval 的寫入；資料庫很大時每次都送整份快照；不同資料庫的快照不是同一瞬間。
+
 ## 1.2.0 — 開發體驗
 
 * **`rucloud init [資料夾] -t <範本>`**：從內建範本建立新專案（`rucloud init --list`）：
