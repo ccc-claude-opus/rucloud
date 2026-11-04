@@ -31,8 +31,8 @@ pub struct S3Cfg {
 
 pub struct S3 {
     cfg: S3Cfg,
-    /// bucket 名稱 → 存放它的應用
-    buckets: BTreeMap<String, Arc<App>>,
+    /// 所有應用；bucket 依目前版本的設定找（部署新版本可能新增 bucket）
+    slots: Vec<Arc<crate::app::Slot>>,
 }
 
 struct S3Err(StatusCode, &'static str, String);
@@ -68,24 +68,26 @@ fn err(status: StatusCode, code: &'static str, msg: impl Into<String>) -> S3Err 
 }
 
 impl S3 {
-    pub fn new(cfg: S3Cfg, apps: &[Arc<App>]) -> Arc<Self> {
-        let mut buckets = BTreeMap::new();
-        for app in apps {
+    pub fn new(cfg: S3Cfg, slots: Vec<Arc<crate::app::Slot>>) -> Arc<Self> {
+        Arc::new(Self { cfg, slots })
+    }
+
+    /// bucket 名稱 → 存放它的應用（同名時第一個為準）
+    fn buckets(&self) -> BTreeMap<String, Arc<App>> {
+        let mut out = BTreeMap::new();
+        for slot in &self.slots {
+            let app = slot.get();
             for name in app.r2_buckets.values() {
-                if buckets.contains_key(name) {
-                    tracing::warn!("S3：bucket {name} 在多個應用裡都有，使用第一個");
-                    continue;
-                }
-                buckets.insert(name.clone(), app.clone());
+                out.entry(name.clone()).or_insert_with(|| app.clone());
             }
         }
-        Arc::new(Self { cfg, buckets })
+        out
     }
 
     fn store(&self, bucket: &str) -> R<Arc<R2>> {
         let app = self
-            .buckets
-            .get(bucket)
+            .buckets()
+            .remove(bucket)
             .ok_or_else(|| err(StatusCode::NOT_FOUND, "NoSuchBucket", format!("找不到 bucket {bucket}")))?;
         Ok(app.r2()?)
     }
@@ -319,7 +321,7 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
     let vhost = host
         .split('.')
         .next()
-        .filter(|b| host.contains('.') && s3.buckets.contains_key(*b))
+        .filter(|b| host.contains('.') && s3.buckets().contains_key(*b))
         .map(String::from);
     let path = decode(raw_path.trim_start_matches('/'));
     let (bucket, key) = match vhost {
@@ -393,7 +395,7 @@ fn list_buckets(s3: &S3) -> axum::response::Response {
     let mut out = String::from(
         "<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Owner><ID>rucloud</ID><DisplayName>rucloud</DisplayName></Owner><Buckets>",
     );
-    for name in s3.buckets.keys() {
+    for name in s3.buckets().keys() {
         out.push_str(&format!(
             "<Bucket><Name>{}</Name><CreationDate>{}</CreationDate></Bucket>",
             esc(name),
@@ -724,7 +726,7 @@ mod tests {
                 access_key_id: "AKIAIOSFODNN7EXAMPLE".into(),
                 secret_access_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into(),
             },
-            buckets: BTreeMap::new(),
+            slots: vec![],
         };
         let mut h = HeaderMap::new();
         h.insert("host", "examplebucket.s3.amazonaws.com".parse().unwrap());

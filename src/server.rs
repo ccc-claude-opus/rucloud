@@ -1,6 +1,6 @@
 //! 把所有元件組起來：綁定 API、各應用的閘道、排程、佇列消費者、DO 鬧鐘、開發模式的熱重載。
 
-use crate::app::{App, Ctx};
+use crate::app::{App, Ctx, Slot};
 use crate::bindings::{self, Hub};
 use crate::config::ServeConfig;
 use crate::gateway;
@@ -45,20 +45,21 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         .build()?;
 
     let ctx = Ctx {
-        state_root: &state_root,
-        node: &cfg.node,
-        host_js: &host_js,
-        bindings_url: &bindings_url,
+        state_root: state_root.clone(),
+        node: cfg.node.clone(),
+        host_js: host_js.clone(),
+        bindings_url: bindings_url.clone(),
         http,
         dev,
     };
-    let mut apps: Vec<(Arc<App>, &crate::config::AppEntry)> = Vec::new();
+    let mut apps: Vec<(Arc<Slot>, &crate::config::AppEntry)> = Vec::new();
     for entry in &cfg.apps {
-        let app = App::load(entry, &ctx)?;
-        if apps.iter().any(|(a, _)| a.name == app.name) {
-            anyhow::bail!("應用名稱重複：{}", app.name);
+        let name = crate::app::app_name(entry)?;
+        if apps.iter().any(|(a, _)| a.name == name) {
+            anyhow::bail!("應用名稱重複：{name}");
         }
-        apps.push((app, entry));
+        let code = crate::deploy::code_dir(&ctx, &name, &entry.path);
+        apps.push((Slot::create(entry, &ctx, &code)?, entry));
     }
 
     let queues = Arc::new(Queues::open(&state_root.join("queues.sqlite"))?);
@@ -81,40 +82,28 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             }));
         }};
     }
-
-    let mut edge_routes: HashMap<String, Arc<App>> = HashMap::new();
-    for (app, entry) in &apps {
-        edge_routes.insert(app.name.clone(), app.clone());
+    let mut edge_routes: HashMap<String, Arc<Slot>> = HashMap::new();
+    for (slot, entry) in &apps {
+        let app = slot.get();
+        edge_routes.insert(slot.name.clone(), slot.clone());
         for h in &entry.hosts {
-            edge_routes.insert(h.clone(), app.clone());
+            edge_routes.insert(h.clone(), slot.clone());
         }
         if let Some(port) = entry.port {
             let addr: SocketAddr = format!("{}:{port}", cfg.bind).parse().context("bind 位址不對")?;
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .with_context(|| format!("無法監聽 {addr}"))?;
-            let router = Router::new().fallback(any(gateway::app_handler)).with_state(app.clone());
+            let router = Router::new().fallback(any(gateway::app_handler)).with_state(slot.clone());
             serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
             let shown = if cfg.bind == "0.0.0.0" {
                 "localhost".to_string()
             } else {
                 cfg.bind.clone()
             };
-            tracing::info!("[{}] http://{shown}:{port}  ({})", app.name, app.dir.display());
+            tracing::info!("[{}] http://{shown}:{port}  ({})", slot.name, app.dir.display());
         }
-        for cron in &app.cfg.triggers.crons {
-            tokio::spawn(cron_loop(app.clone(), cron.clone()));
-        }
-        for consumer in &app.cfg.queues.consumers {
-            tokio::spawn(queues.clone().consume(app.clone(), consumer.clone()));
-        }
-        if !app.cfg.durable_objects.bindings.is_empty() {
-            tokio::spawn(alarm_loop(app.clone()));
-        }
-        tokio::spawn(purge_loop(app.clone()));
-        if entry.watch {
-            tokio::spawn(watch_loop(app.clone()));
-        }
+        crate::deploy::restart_background(slot, &app, &queues);
     }
     if let Some(edge) = &cfg.edge {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, edge.port).parse()?;
@@ -137,8 +126,8 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
 
     if let Some(s3_cfg) = cfg.s3.clone() {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, s3_cfg.port).parse()?;
-        let all: Vec<Arc<App>> = apps.iter().map(|(a, _)| a.clone()).collect();
-        let s3 = crate::s3::S3::new(s3_cfg, &all);
+        let all: Vec<Arc<Slot>> = apps.iter().map(|(a, _)| a.clone()).collect();
+        let s3 = crate::s3::S3::new(s3_cfg, all);
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
@@ -149,11 +138,18 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
     if let Some(admin_cfg) = cfg.admin.clone() {
         let addr: SocketAddr = format!("{}:{}", admin_cfg.bind, admin_cfg.port).parse()?;
+        let deployer = Arc::new(crate::deploy::Deployer {
+            ctx: ctx.clone(),
+            slots: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
+            queues: queues.clone(),
+            grace: Duration::from_secs(cfg.shutdown_timeout),
+        });
         let admin = Arc::new(crate::admin::Admin {
             apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
             queues: queues.clone(),
             token: admin_cfg.token.clone(),
             draining: draining.clone(),
+            deployer,
         });
         let listener = tokio::net::TcpListener::bind(addr)
             .await
@@ -171,11 +167,12 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     if drained.is_err() {
         tracing::warn!("還有請求沒做完，強制結束");
     }
-    for (app, _) in &apps {
-        if let Some(pool) = &app.pool {
+    for (slot, _) in &apps {
+        slot.background.lock().unwrap().cancel();
+        if let Some(pool) = &slot.get().pool {
             pool.stop();
         }
-        app.logs.flush();
+        slot.shared.logs.flush();
     }
     // 讓 Worker 程序有時間收到 kill
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -203,7 +200,7 @@ async fn wait_for_signal() {
 }
 
 /// Cron Triggers：5 欄位的 cron（UTC），到時間呼叫 scheduled()
-async fn cron_loop(app: Arc<App>, expr: String) {
+pub async fn cron_loop(app: Arc<App>, expr: String) {
     let schedule = match cron::Schedule::from_str(&format!("0 {expr}")) {
         Ok(s) => s,
         Err(e) => {
@@ -223,7 +220,7 @@ async fn cron_loop(app: Arc<App>, expr: String) {
 }
 
 /// Durable Object 鬧鐘：到期就呼叫該物件的 alarm()，失敗 10 秒後重試
-async fn alarm_loop(app: Arc<App>) {
+pub async fn alarm_loop(app: Arc<App>) {
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     loop {
         tick.tick().await;
@@ -248,7 +245,7 @@ async fn alarm_loop(app: Arc<App>) {
     }
 }
 
-async fn purge_loop(app: Arc<App>) {
+pub async fn purge_loop(app: Arc<App>) {
     let mut tick = tokio::time::interval(Duration::from_secs(300));
     loop {
         tick.tick().await;
@@ -258,7 +255,7 @@ async fn purge_loop(app: Arc<App>) {
 }
 
 /// 開發模式：Worker 程式碼（main 所在資料夾）有變動就重開程序
-async fn watch_loop(app: Arc<App>) {
+pub async fn watch_loop(app: Arc<App>) {
     let Some(pool) = app.pool.clone() else { return };
     let Some(main) = app.cfg.main.as_ref() else { return };
     let root = app.dir.join(main).parent().map(Path::to_path_buf).unwrap_or(app.dir.clone());

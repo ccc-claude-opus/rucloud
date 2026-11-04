@@ -468,3 +468,202 @@ pub async fn tail(admin: &str, app: &str, token: Option<&str>, n: usize, kind: O
     }
     Ok(())
 }
+
+// ---------- 部署 ----------
+
+/// 連管理埠用的共用參數
+#[derive(Args, Clone)]
+pub struct AdminRef {
+    /// 管理埠的網址
+    #[arg(long, default_value = "http://127.0.0.1:8799")]
+    pub admin: String,
+    /// 管理 token（也可以用環境變數 RUCLOUD_ADMIN_TOKEN）
+    #[arg(long, env = "RUCLOUD_ADMIN_TOKEN")]
+    pub token: Option<String>,
+}
+
+impl AdminRef {
+    fn req(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        let mut r = reqwest::Client::new().request(method, format!("{}{path}", self.admin.trim_end_matches('/')));
+        if let Some(t) = &self.token {
+            r = r.bearer_auth(t);
+        }
+        r
+    }
+
+    async fn send(&self, rb: reqwest::RequestBuilder) -> Result<Value> {
+        let res = rb
+            .send()
+            .await
+            .with_context(|| format!("連不到 {}（rucloud 有開管理埠嗎？）", self.admin))?;
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        let v: Value = serde_json::from_str(&text).unwrap_or(Value::String(text.clone()));
+        if !status.is_success() {
+            bail!("{status}：{}", v["error"].as_str().unwrap_or(text.trim()));
+        }
+        Ok(v)
+    }
+}
+
+/// 打包應用資料夾上傳成新版本
+pub async fn deploy(dir: &Path, app: Option<String>, message: &str, activate: bool, admin: &AdminRef) -> Result<()> {
+    let dir = dir.canonicalize().with_context(|| format!("找不到 {}", dir.display()))?;
+    let name = match app {
+        Some(a) => a,
+        None => config::load_wrangler(&dir, None)?
+            .name
+            .context("wrangler 設定沒有 name，請用 --app 指定應用名稱")?,
+    };
+    let d2 = dir.clone();
+    let body = tokio::task::spawn_blocking(move || crate::deploy::pack(&d2)).await??;
+    eprintln!("打包 {}：{:.1} KB", dir.display(), body.len() as f64 / 1024.0);
+    let path = format!(
+        "/apps/{}/versions?activate={activate}&message={}",
+        urlencoding::encode(&name),
+        urlencoding::encode(message)
+    );
+    let v = admin
+        .send(
+            admin
+                .req(reqwest::Method::POST, &path)
+                .header("content-type", "application/gzip")
+                .body(body),
+        )
+        .await?;
+    let id = v["version"]["id"].as_str().unwrap_or("");
+    if activate {
+        println!("已部署 {name} 版本 {id}");
+    } else {
+        println!("已上傳 {name} 版本 {id}（尚未啟用）");
+    }
+    Ok(())
+}
+
+pub async fn versions(app: &str, admin: &AdminRef) -> Result<()> {
+    let v = admin
+        .send(admin.req(reqwest::Method::GET, &format!("/apps/{}/versions", urlencoding::encode(app))))
+        .await?;
+    let current = v["current"].as_str();
+    if current.is_none() {
+        println!("* （設定檔的 path）");
+    }
+    for ver in v["versions"].as_array().into_iter().flatten().rev() {
+        let id = ver["id"].as_str().unwrap_or("");
+        println!(
+            "{} {id}  {}  {} 個檔案  {}",
+            if Some(id) == current { "*" } else { " " },
+            ver["created"].as_str().unwrap_or("").get(..19).unwrap_or(""),
+            ver["files"],
+            ver["message"].as_str().unwrap_or("")
+        );
+    }
+    Ok(())
+}
+
+pub async fn rollback(app: &str, to: Option<&str>, admin: &AdminRef) -> Result<()> {
+    let app_enc = urlencoding::encode(app);
+    let v = match to {
+        Some(id) => {
+            admin
+                .send(admin.req(reqwest::Method::POST, &format!("/apps/{app_enc}/versions/{id}/activate")))
+                .await?
+        }
+        None => {
+            admin
+                .send(admin.req(reqwest::Method::POST, &format!("/apps/{app_enc}/rollback")))
+                .await?
+        }
+    };
+    println!("{app} 目前版本：{}", v["current"].as_str().unwrap_or("（設定檔的 path）"));
+    Ok(())
+}
+
+pub async fn reload(app: &str, admin: &AdminRef) -> Result<()> {
+    admin
+        .send(admin.req(reqwest::Method::POST, &format!("/apps/{}/reload", urlencoding::encode(app))))
+        .await?;
+    println!("已重新載入 {app}");
+    Ok(())
+}
+
+// ---------- 備份 ----------
+
+/// 把整個 state 資料夾打包成 tar.gz。SQLite 用線上備份 API，rucloud 執行中也可以備份
+pub fn backup(state: &Path, out: &Path, with_logs: bool) -> Result<()> {
+    let state = state.canonicalize().with_context(|| format!("找不到 {}", state.display()))?;
+    let file = std::fs::File::create(out).with_context(|| format!("無法建立 {}", out.display()))?;
+    let mut tar = tar::Builder::new(flate2::write::GzEncoder::new(file, flate2::Compression::default()));
+    let tmp_dir = std::env::temp_dir().join(format!("rucloud-backup-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+    let (mut dbs, mut files) = (0, 0);
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        for e in std::fs::read_dir(state.join(&rel))? {
+            let e = e?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            let path = rel.join(&name);
+            let meta = e.metadata()?;
+            // 執行環境每次啟動都會重寫；WAL / SHM 由線上備份處理；暫存檔不需要
+            if rel.as_os_str().is_empty() && name == "runtime"
+                || name.ends_with("-wal")
+                || name.ends_with("-shm")
+                || name.ends_with(".tmp")
+                || name == "tmp"
+                || (name == "logs" && !with_logs)
+            {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(path);
+            } else if name.ends_with(".sqlite") {
+                let src = rusqlite::Connection::open_with_flags(e.path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                let copy = tmp_dir.join(format!("{dbs}.sqlite"));
+                let mut dst = rusqlite::Connection::open(&copy)?;
+                rusqlite::backup::Backup::new(&src, &mut dst)?.run_to_completion(256, std::time::Duration::from_millis(20), None)?;
+                drop(dst);
+                tar.append_path_with_name(&copy, &path)?;
+                std::fs::remove_file(&copy)?;
+                dbs += 1;
+            } else if meta.is_file() {
+                tar.append_path_with_name(e.path(), &path)?;
+                files += 1;
+            }
+        }
+    }
+    tar.into_inner()?.finish()?;
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    println!("已備份 {dbs} 個資料庫、{files} 個檔案到 {}", out.display());
+    Ok(())
+}
+
+/// 從 tar.gz 還原到 state 資料夾（請先停掉 rucloud）
+pub fn restore(archive: &Path, state: &Path, force: bool) -> Result<()> {
+    if state.exists() && std::fs::read_dir(state)?.next().is_some() && !force {
+        bail!("{} 不是空的；確定要覆蓋請加 --force（請先停掉 rucloud）", state.display());
+    }
+    std::fs::create_dir_all(state)?;
+    let file = std::fs::File::open(archive).with_context(|| format!("讀不到 {}", archive.display()))?;
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(file));
+    let mut n = 0;
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        let kind = entry.header().entry_type();
+        if !(kind.is_file() || kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path()?.into_owned();
+        // 覆蓋 SQLite 檔時，舊的 WAL / SHM 要一起清掉，不然會被套回去
+        if path.extension().is_some_and(|e| e == "sqlite") {
+            for ext in ["sqlite-wal", "sqlite-shm"] {
+                let _ = std::fs::remove_file(state.join(&path).with_extension(ext));
+            }
+        }
+        if !entry.unpack_in(state)? {
+            bail!("備份檔裡有不安全的路徑：{}", path.display());
+        }
+        n += 1;
+    }
+    println!("已還原 {n} 個項目到 {}", state.display());
+    Ok(())
+}

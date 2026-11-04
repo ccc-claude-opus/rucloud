@@ -133,7 +133,7 @@ impl VectorStore {
             .prepare("SELECT id, namespace, vals, metadata FROM vectors WHERE idx = ?")?
             .query_map([index], |r| {
                 let raw: Vec<u8> = r.get(2)?;
-                let values: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+                let values: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
                 let meta: String = r.get(3)?;
                 Ok(Item {
                     id: r.get(0)?,

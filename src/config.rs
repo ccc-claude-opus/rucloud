@@ -327,6 +327,8 @@ pub struct AppEntry {
     pub memory_mb: Option<u32>,
     /// 事件迴圈卡住超過幾毫秒就重開程序；0 = 不檢查。預設 30000
     pub max_block_ms: Option<u64>,
+    /// Durable Object 閒置多久（毫秒）就從記憶體移除；0 = 不移除。預設 60000
+    pub do_idle_ms: Option<u64>,
     /// Worker 的 log 每天寫一個檔（<state>/<應用>/logs/）
     #[serde(default = "yes")]
     pub log_files: bool,

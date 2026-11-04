@@ -1,0 +1,7 @@
+// Durable Object 閒置逐出的測試
+{
+  "name": "evict",
+  "main": "src/worker.js",
+  "durable_objects": { "bindings": [{ "name": "OBJ", "class_name": "Obj" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Obj"] }]
+}

@@ -11,6 +11,7 @@ mod bindings;
 mod cli;
 mod config;
 mod d1;
+mod deploy;
 mod durable;
 mod gateway;
 mod kv;
@@ -123,6 +124,61 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// 部署：把應用資料夾打包上傳成新版本並啟用（不含 .dev.vars 等密鑰檔）
+    Deploy {
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// 應用名稱（預設用 wrangler 設定的 name）
+        #[arg(long)]
+        app: Option<String>,
+        /// 版本說明
+        #[arg(short, long, default_value = "")]
+        message: String,
+        /// 只上傳，不啟用
+        #[arg(long)]
+        no_activate: bool,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 列出應用的版本（* 是目前的）
+    Versions {
+        app: String,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 回到上一個版本，或用 --to 指定版本（--to path 回到設定檔的 path）
+    Rollback {
+        app: String,
+        #[arg(long)]
+        to: Option<String>,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 重新載入應用（改了 wrangler 設定或密鑰之後）
+    Reload {
+        app: String,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 備份整個資料夾（D1、KV、R2、Durable Objects、佇列、部署的版本）；執行中也可以
+    Backup {
+        #[arg(long, default_value = ".rucloud")]
+        state: PathBuf,
+        #[arg(short, long)]
+        out: PathBuf,
+        /// 連 log 檔一起備份
+        #[arg(long)]
+        with_logs: bool,
+    },
+    /// 從備份還原（請先停掉 rucloud）
+    Restore {
+        archive: PathBuf,
+        #[arg(long, default_value = ".rucloud")]
+        state: PathBuf,
+        /// 資料夾不是空的也覆蓋
+        #[arg(long)]
+        force: bool,
+    },
     /// 單獨跑 AI Gateway
     AiGateway {
         #[arg(long, default_value_t = 8790)]
@@ -205,6 +261,7 @@ async fn main() -> Result<()> {
                     memory_mb,
                     max_block_ms: Some(max_block_ms),
                     log_files: true,
+                    do_idle_ms: None,
                 }],
             };
             server::run(cfg, true).await
@@ -212,6 +269,18 @@ async fn main() -> Result<()> {
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
+        Cmd::Backup { state, out, with_logs } => cli::backup(&state, &out, with_logs),
+        Cmd::Restore { archive, state, force } => cli::restore(&archive, &state, force),
+        Cmd::Deploy {
+            dir,
+            app,
+            message,
+            no_activate,
+            admin,
+        } => cli::deploy(&dir, app, &message, !no_activate, &admin).await,
+        Cmd::Versions { app, admin } => cli::versions(&app, &admin).await,
+        Cmd::Rollback { app, to, admin } => cli::rollback(&app, to.as_deref(), &admin).await,
+        Cmd::Reload { app, admin } => cli::reload(&app, &admin).await,
         Cmd::Tail {
             app,
             admin,

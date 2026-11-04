@@ -22,13 +22,17 @@ const HOP_BY_HOP: [&str; 8] = [
     "upgrade",
 ];
 
-pub async fn app_handler(State(app): State<Arc<App>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response<Body> {
-    handle(&app, req, peer).await
+pub async fn app_handler(
+    State(slot): State<Arc<crate::app::Slot>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+) -> Response<Body> {
+    handle(&slot.get(), req, peer).await
 }
 
 /// 共用入口：依 Host 找應用
 pub async fn edge_handler(
-    State(routes): State<Arc<HashMap<String, Arc<App>>>>,
+    State(routes): State<Arc<HashMap<String, Arc<crate::app::Slot>>>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response<Body> {
@@ -40,7 +44,7 @@ pub async fn edge_handler(
         .unwrap_or(host);
     let app = routes.get(host).or_else(|| routes.get(host.split('.').next().unwrap_or("")));
     match app {
-        Some(app) => handle(app, req, peer).await,
+        Some(slot) => handle(&slot.get(), req, peer).await,
         None => (StatusCode::NOT_FOUND, format!("rucloud：沒有應用對應到主機 {host}\n")).into_response(),
     }
 }

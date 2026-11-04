@@ -74,6 +74,7 @@ allow_read = []                  # 沙箱額外可讀的路徑，例如 monorepo
 allow_write = []
 memory_mb = 256                  # 每個 Worker 程序的 JS heap 上限
 max_block_ms = 30000             # 事件迴圈卡住多久就重開程序（0 = 不檢查）
+do_idle_ms = 60000               # Durable Object 閒置多久就從記憶體移除（0 = 不移除）
 ```
 
 TLS 建議交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）。rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。
@@ -88,6 +89,29 @@ rucloud tail myshop --kind error           # 只看錯誤
 ```
 
 log 也會存成每天一個檔：`<state>/<應用>/logs/YYYY-MM-DD.log`（JSON lines）。
+
+### 部署新版本
+
+管理埠開著時，可以從任何地方部署（遠端部署請把管理埠綁到內網或放在 TLS 反向代理後面，並設定 token）：
+
+```bash
+rucloud deploy ./myshop -m "新增報表" --admin https://admin.example.com --token …
+rucloud versions myshop                   # * 是目前的版本
+rucloud rollback myshop                   # 回到上一版
+rucloud rollback myshop --to path         # 回到 rucloud.toml 的 path
+rucloud reload myshop                     # 改了 .dev.vars / env_file 之後
+```
+
+* 打包時不含 `.dev.vars`、`.env*`、`.git`、`.wrangler`；`node_modules` 會一起上傳。
+* 切換不停機：新版本的 Worker 全部起來才換上；起不來就維持原本的版本並回報錯誤。
+* 換版的瞬間新舊程序會短暫並存：同一個 Durable Object 在舊程序裡還沒做完的事件，可能和新程序的事件重疊。
+
+### 備份
+
+```bash
+rucloud backup --state /var/lib/rucloud -o backup-$(date +%F).tar.gz   # 執行中也可以
+rucloud restore backup-2026-11-04.tar.gz --state /var/lib/rucloud       # 先停掉 rucloud
+```
 
 ## 3. Docker
 

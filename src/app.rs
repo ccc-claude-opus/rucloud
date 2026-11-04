@@ -38,31 +38,91 @@ pub struct App {
 }
 
 /// 建立應用時需要的共用資訊
-pub struct Ctx<'a> {
-    pub state_root: &'a Path,
-    pub node: &'a str,
-    pub host_js: &'a Path,
-    pub bindings_url: &'a str,
+#[derive(Clone)]
+pub struct Ctx {
+    pub state_root: PathBuf,
+    pub node: String,
+    pub host_js: PathBuf,
+    pub bindings_url: String,
     pub http: reqwest::Client,
     pub dev: bool,
 }
 
+/// 跨版本不變的東西：換版時新舊 Worker 程序會同時存在一下子，token 要相同；計數與 log 也要接續
+pub struct Shared {
+    pub token: String,
+    pub metrics: Arc<crate::observe::Metrics>,
+    pub logs: Arc<crate::observe::Logs>,
+}
+
+/// 一個應用名稱對應的「目前版本」。部署、rollback 時替換裡面的 App
+pub struct Slot {
+    pub name: String,
+    pub entry: AppEntry,
+    pub shared: Shared,
+    current: std::sync::RwLock<Arc<App>>,
+    /// 目前版本的背景工作（cron、佇列消費者、鬧鐘…），換版時取消
+    pub background: Mutex<tokio_util::sync::CancellationToken>,
+}
+
+impl Slot {
+    pub fn get(&self) -> Arc<App> {
+        self.current.read().unwrap().clone()
+    }
+
+    /// 換成新版本，回傳舊的
+    pub fn set(&self, app: Arc<App>) -> Arc<App> {
+        std::mem::replace(&mut *self.current.write().unwrap(), app)
+    }
+}
+
+/// 應用名稱：rucloud.toml 的 name > wrangler 的 name > 資料夾名稱
+pub fn app_name(entry: &AppEntry) -> Result<String> {
+    let dir = entry
+        .path
+        .canonicalize()
+        .with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
+    let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
+    Ok(entry
+        .name
+        .clone()
+        .or(cfg.name)
+        .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned()))
+}
+
+impl Slot {
+    /// 第一次載入：code_dir 是要跑的程式碼（部署過的版本，或設定檔的 path）
+    pub fn create(entry: &AppEntry, ctx: &Ctx, code_dir: &Path) -> Result<Arc<Slot>> {
+        let name = app_name(entry)?;
+        let state = ctx.state_root.join(&name);
+        let shared = Shared {
+            // 每個應用一把自己的 token：Worker 只能用它存取自己的綁定
+            token: format!("{:032x}", rand::random::<u128>()),
+            metrics: Arc::default(),
+            logs: Arc::new(crate::observe::Logs::new(&name, entry.log_files.then(|| state.join("logs")))),
+        };
+        let app = App::load(entry, ctx, code_dir, &name, &shared)?;
+        Ok(Arc::new(Slot {
+            name,
+            entry: entry.clone(),
+            shared,
+            current: std::sync::RwLock::new(app),
+            background: Mutex::new(tokio_util::sync::CancellationToken::new()),
+        }))
+    }
+}
+
 impl App {
-    pub fn load(entry: &AppEntry, ctx: &Ctx) -> Result<Arc<App>> {
-        let dir = entry
-            .path
+    /// code_dir：程式碼所在的資料夾；密鑰（.dev.vars）仍然從設定檔的 path 讀，部署的版本裡不放密鑰
+    pub fn load(entry: &AppEntry, ctx: &Ctx, code_dir: &Path, name: &str, shared: &Shared) -> Result<Arc<App>> {
+        let dir = code_dir
             .canonicalize()
-            .with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
+            .with_context(|| format!("找不到應用資料夾 {}", code_dir.display()))?;
         let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
-        let name = entry
-            .name
-            .clone()
-            .or_else(|| cfg.name.clone())
-            .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned());
+        let name = name.to_string();
         let state = ctx.state_root.join(&name);
         std::fs::create_dir_all(state.join("do-sqlite"))?;
-        // 每個應用一把自己的 token：Worker 只能用它存取自己的綁定
-        let token = format!("{:032x}", rand::random::<u128>());
+        let token = shared.token.clone();
 
         let mut d1 = HashMap::new();
         for db in &cfg.d1_databases {
@@ -83,7 +143,8 @@ impl App {
         }
 
         let mut vars: BTreeMap<String, Value> = cfg.vars.clone().into_iter().collect();
-        for (k, v) in config::load_dev_vars(&dir, entry.env.as_deref()) {
+        let secrets_dir = entry.path.canonicalize().unwrap_or_else(|_| dir.clone());
+        for (k, v) in config::load_dev_vars(&secrets_dir, entry.env.as_deref()) {
             vars.insert(k, Value::String(v));
         }
         if let Some(f) = &entry.env_file {
@@ -114,12 +175,13 @@ impl App {
             "sqliteClasses": cfg.migrations.iter().flat_map(|m| m.new_sqlite_classes.iter()).collect::<Vec<_>>(),
             "doSqliteDir": state.join("do-sqlite"),
             "rules": cfg.rules,
+            "doIdleMs": entry.do_idle_ms.unwrap_or(60_000),
         });
-        let logs = Arc::new(crate::observe::Logs::new(&name, entry.log_files.then(|| state.join("logs"))));
+        let logs = shared.logs.clone();
         let mut node_args = Vec::new();
         if entry.sandbox {
             // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
-            let runtime_dir = ctx.host_js.parent().unwrap_or(ctx.host_js);
+            let runtime_dir = ctx.host_js.parent().unwrap_or(&ctx.host_js);
             node_args.push("--permission".to_string());
             for p in [dir.as_path(), runtime_dir]
                 .into_iter()
@@ -179,7 +241,7 @@ impl App {
             dev: ctx.dev,
             http: ctx.http.clone(),
             token,
-            metrics: Arc::default(),
+            metrics: shared.metrics.clone(),
             logs,
         }))
     }

@@ -12,6 +12,7 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { HTMLRewriter } from './html-rewriter.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { mkdirSync, rmSync, readFileSync } from 'node:fs';
@@ -225,9 +226,17 @@ class CfWebSocket extends EventTarget {
   }
 }
 
+// 正在處理哪個 Durable Object 的事件（在 DO 裡建立的 WebSocket 會讓物件不被逐出）
+const doContext = new AsyncLocalStorage();
+
 globalThis.WebSocketPair = function WebSocketPair() {
   const client = new CfWebSocket();
   const server = new CfWebSocket();
+  const owner = doContext.getStore();
+  if (owner) {
+    owner.openSockets.add(server);
+    server.addEventListener('close', () => owner.openSockets.delete(server));
+  }
   client._peer = server;
   server._peer = client;
   client._accepted = true;
@@ -1039,7 +1048,7 @@ function getInstance(ns, id) {
     const Cls = def && workerModule[def.className];
     if (typeof Cls !== 'function') throw new Error(`Durable Object 類別 ${def?.className ?? ns} 沒有從 main 模組 export`);
     const state = new DurableObjectState(ns, id, sqliteClasses.has(def.className));
-    inst = { state, obj: null };
+    inst = { state, obj: null, busy: 0, lastUsed: Date.now(), openSockets: new Set() };
     state._inst = inst;
     inst.obj = new Cls(state, env);
     // 建構子裡 blockConcurrencyWhile 的工作做完之前，事件都要排隊
@@ -1051,9 +1060,27 @@ function getInstance(ns, id) {
 
 // 同一個物件的事件一次處理一個（近似 Cloudflare 的 input gate，避免讀-改-寫被插隊）
 function serial(inst, fn) {
-  const p = inst.chain.then(fn);
-  inst.chain = p.catch(() => {});
+  inst.busy++;
+  const p = inst.chain.then(() => doContext.run(inst, fn));
+  inst.chain = p.catch(() => {}).finally(() => { inst.busy--; inst.lastUsed = Date.now(); });
   return p;
+}
+
+// 閒置的物件從記憶體移除（下次有事件再重建），SQLite 連線也關掉。
+// 有開著的 WebSocket（含 hibernation 的）、還有事件在處理的物件不會被移除。
+const DO_IDLE_MS = spec.doIdleMs ?? 60_000;
+if (DO_IDLE_MS > 0) {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, inst] of doInstances) {
+      const sockets = inst.state._sockets.size + [...inst.openSockets].filter((ws) => ws.readyState < 3).length;
+      if (inst.busy === 0 && sockets === 0 && now - inst.lastUsed > DO_IDLE_MS) {
+        doInstances.delete(key);
+        const st = inst.state.storage;
+        if (st._db) { try { st._db.close(); } catch { /* 已經關了 */ } st._db = null; }
+      }
+    }
+  }, Math.min(DO_IDLE_MS, 10_000)).unref();
 }
 
 // ---------- 其他綁定 ----------

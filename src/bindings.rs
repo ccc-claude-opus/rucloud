@@ -19,7 +19,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub struct Hub {
-    pub apps: HashMap<String, Arc<App>>,
+    pub apps: HashMap<String, Arc<crate::app::Slot>>,
     pub queues: Arc<Queues>,
 }
 
@@ -47,7 +47,10 @@ fn not_found(what: &str) -> ApiError {
 
 impl Hub {
     fn app(&self, name: &str) -> R<Arc<App>> {
-        self.apps.get(name).cloned().ok_or_else(|| not_found(&format!("應用 {name}")))
+        self.apps
+            .get(name)
+            .map(|s| s.get())
+            .ok_or_else(|| not_found(&format!("應用 {name}")))
     }
 }
 
@@ -90,7 +93,7 @@ async fn auth(State(hub): S, req: Request, next: Next) -> Response {
         .strip_prefix("/b/")
         .and_then(|p| p.split('/').next())
         .map(|a| urlencoding::decode(a).map(|s| s.into_owned()).unwrap_or_default());
-    let expected = app.and_then(|a| hub.apps.get(&a).map(|a| a.token.clone()));
+    let expected = app.and_then(|a| hub.apps.get(&a).map(|a| a.shared.token.clone()));
     if expected.is_none_or(|t| req.headers().get("x-rucloud-token").is_none_or(|h| h.as_bytes() != t.as_bytes())) {
         return ApiError(StatusCode::FORBIDDEN, "token 不對".into()).into_response();
     }
@@ -100,7 +103,7 @@ async fn auth(State(hub): S, req: Request, next: Next) -> Response {
         Some((it.next()?, it.next()?))
     }) && let Some(a) = hub.apps.get(&urlencoding::decode(app).map(|s| s.into_owned()).unwrap_or_default())
     {
-        a.metrics.binding(kind);
+        a.shared.metrics.binding(kind);
     }
     next.run(req).await
 }

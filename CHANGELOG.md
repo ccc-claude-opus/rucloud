@@ -1,5 +1,18 @@
 # 更新紀錄
 
+## 0.10.0 — 部署、版本與備份
+
+* **部署**：`rucloud deploy [資料夾] --admin <管理埠>` 把應用打包（不含 `.dev.vars`、`.env` 等密鑰檔與 `.git`）上傳成新版本並啟用。
+  * 不停機切換：新版本的 Worker 程序全部起來後才換上，舊版本等 `shutdown_timeout` 秒讓進行中的請求做完才關。
+  * 新版本起不來（例如語法錯誤）時馬上回報錯誤，線上維持原本的版本。
+  * 版本存在 `<state>/<應用>/versions/`，保留最近 10 個；重啟 rucloud 後仍跑部署的版本。
+  * 密鑰仍然從設定檔 `path` 的 `.dev.vars` 與 `env_file` 讀，不會跟著程式碼上傳。
+* `rucloud versions <應用>`、`rucloud rollback <應用> [--to <版本>|path]`、`rucloud reload <應用>`（改了設定或密鑰後重新載入，同樣不停機）。
+* 管理 API：`GET/POST /apps/<應用>/versions`、`POST /apps/<應用>/versions/<id>/activate`、`/rollback`、`/reload`。
+* **Durable Object 閒置逐出**：閒置超過 `do_idle_ms`（預設 60 秒）的物件從記憶體移除並關閉 SQLite 連線；有開著的 WebSocket 或還在處理事件的物件不會被移除。
+* **備份與還原**：`rucloud backup -o backup.tar.gz`（SQLite 用線上備份 API，執行中也可以）、`rucloud restore backup.tar.gz`。
+* 專案加上 `rust-toolchain.toml`（stable）。
+
 ## 0.9.0 — 維運
 
 * **優雅關閉**：收到 SIGTERM / Ctrl-C 時停止接受新連線，等進行中的請求做完（`shutdown_timeout`，預設 30 秒），再關掉 Worker 程序。`docker stop` 不會再中斷請求。
