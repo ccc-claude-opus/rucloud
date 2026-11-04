@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 
 const HOST_JS: &str = include_str!("../runtime/host.mjs");
 const WORKERS_JS: &str = include_str!("../runtime/cloudflare-workers.mjs");
+const REWRITER_JS: &str = include_str!("../runtime/html-rewriter.mjs");
 
 /// 把內嵌的 JS 執行環境寫到 state 資料夾，回傳 host.mjs 的路徑
 fn write_runtime(state_root: &Path) -> Result<PathBuf> {
@@ -25,6 +26,7 @@ fn write_runtime(state_root: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("host.mjs"), HOST_JS)?;
     std::fs::write(dir.join("cloudflare-workers.mjs"), WORKERS_JS)?;
+    std::fs::write(dir.join("html-rewriter.mjs"), REWRITER_JS)?;
     Ok(dir.join("host.mjs").canonicalize()?)
 }
 

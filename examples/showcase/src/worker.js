@@ -93,6 +93,16 @@ export default {
 
     if (p === '/api/cron') return json({ lastCron: await env.KV.get('last-cron') });
 
+    // HTMLRewriter：拿靜態的 index.html，改標題、插一段計數
+    if (p === '/api/page') {
+      const page = await env.ASSETS.fetch(new Request(new URL('/index.html', url)));
+      const visits = Number((await env.KV.get('visits')) || 0);
+      return new HTMLRewriter()
+        .on('h1', { element(el) { el.setInnerContent(`rucloud showcase（第 ${visits} 次造訪）`); } })
+        .on('p', { element(el) { el.after('<p><a href="/api/vars">看 vars</a></p>', { html: true }); } })
+        .transform(page);
+    }
+
     return env.ASSETS.fetch(request);
   },
 

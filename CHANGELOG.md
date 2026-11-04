@@ -1,5 +1,15 @@
 # 更新紀錄
 
+## 0.7.0 — HTMLRewriter
+
+* `HTMLRewriter`（子集）：`on(selector, { element, text, comments })`、`onDocument({ doctype, text, comments, end })`、`transform(response)`。
+  * Element：`getAttribute / setAttribute / removeAttribute / hasAttribute / attributes`、`before / after / prepend / append / replace / setInnerContent`（`{ html: true }`）、`remove / removeAndKeepContent`、`onEndTag`。
+  * 選擇器：`*`、標籤、`#id`、`.class`、`[attr]`、`[attr=v]` `^=` `$=` `*=` `~=` `|=`（含 `i`）、後代與 `>` 子代、`:first-child`、`:not()`。
+  * `script` / `style` 等的內容不會被當成 HTML 解析；非 HTML 的回應原樣傳回。
+  * 和 Cloudflare 的差異：整份讀完才處理（不是串流）；一個文字節點只呼叫一次 `text()`。
+* `request.cf.country` 會取自 `CF-IPCountry` 標頭（rucloud 放在 Cloudflare 後面時）。
+* showcase 新增 `/api/page`：用 HTMLRewriter 改寫靜態的 index.html。
+
 ## 0.6.0 — wrangler 相容性
 
 * 讀 `wrangler.toml`（和 `wrangler.jsonc` / `wrangler.json` 並列）。

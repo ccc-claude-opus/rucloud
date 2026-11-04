@@ -12,6 +12,7 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
+import { HTMLRewriter } from './html-rewriter.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { dirname, relative, sep } from 'node:path';
@@ -1146,6 +1147,7 @@ globalThis.caches = {
   default: new MemoryCache(),
   async open(name) { if (!namedCaches.has(name)) namedCaches.set(name, new MemoryCache()); return namedCaches.get(name); },
 };
+globalThis.HTMLRewriter = HTMLRewriter;
 globalThis.scheduler ??= { wait: (ms) => new Promise((r) => setTimeout(r, ms)) };
 
 const listeners = { fetch: [], scheduled: [], queue: [] };
@@ -1217,7 +1219,9 @@ function toRequest(req, urlOverride) {
     init.duplex = 'half';
   }
   const request = new Request(url, init);
-  Object.defineProperty(request, 'cf', { value: { ...CF }, enumerable: false });
+  // 放在 Cloudflare（例如 Tunnel）後面時，國家取自 CF-IPCountry
+  const country = headers.get('cf-ipcountry');
+  Object.defineProperty(request, 'cf', { value: { ...CF, ...(country ? { country } : {}) }, enumerable: false });
   return request;
 }
 

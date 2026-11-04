@@ -8,7 +8,7 @@
 |---|---|
 | 模組格式 | `export default { fetch, queue, scheduled }`、`export default class extends WorkerEntrypoint`、`addEventListener('fetch')` |
 | 全域 API | Node.js 24 原生的 `fetch`、`Request`、`Response`、`Headers`、`URL`、Web Streams、`crypto.subtle`、`TextEncoder`… |
-| `request.cf` | 固定的假值（`colo: "LOCAL"`） |
+| `request.cf` | 固定的假值（`colo: "LOCAL"`）；有 `CF-IPCountry` 標頭時 `country` 取自它 |
 | `ctx.waitUntil` | ✓（不阻擋回應） |
 | `caches.default` / `caches.open` | 程序內記憶體快取，依 `Cache-Control: max-age / s-maxage` |
 | `cloudflare:workers` | `DurableObject`、`WorkerEntrypoint`、`WorkflowEntrypoint`、`RpcTarget`、`env`、`waitUntil` |
@@ -22,7 +22,8 @@
 | `process.env` | 只有 `PATH`、`HOME` 等基本變數；請用 `env` 取得設定與密鑰 |
 | 檔案系統 | 預設只能讀應用資料夾、不能寫（Node 權限模型） |
 | `WebSocketPair`、101 回應 | ✓（見下方 WebSocket 一節） |
-| `HTMLRewriter`、`connect()` | 不支援 |
+| `HTMLRewriter` | ✓ 子集（見下方） |
+| `connect()` | 不支援 |
 
 ## WebSocket
 
@@ -37,6 +38,25 @@ return new Response(null, { status: 101, webSocket: client });
 * 轉給 Durable Object（`return stub.fetch(request)`）或 service binding 時，跨程序同樣是位元組對接，不會多一層解碼。
 * 101 送出前 `send()` 的訊息會先排隊，連線接上後依序送出。
 * 單則訊息上限 32 MB。不支援 `permessage-deflate` 壓縮，也不支援 Worker 主動連出去的 `fetch()` upgrade（請改用 Node 內建的 `WebSocket` 客戶端）。
+
+## HTMLRewriter
+
+```js
+return new HTMLRewriter()
+  .on('a[href^="http"]', { element(el) { el.setAttribute('target', '_blank'); } })
+  .on('#main > p:first-child', { text(t) { t.replace(t.text.toUpperCase()); } })
+  .onDocument({ end(end) { end.append('<!-- by rucloud -->', { html: true }); } })
+  .transform(await env.ASSETS.fetch(request));
+```
+
+| 項目 | 支援 |
+|---|---|
+| 選擇器 | `*`、標籤、`#id`、`.class`、`[attr]`、`[attr=v]` `^=` `$=` `*=` `~=` `\|=`（可加 `i`）、後代（空白）、子代（`>`）、`:first-child`、`:not(簡單選擇器)` |
+| Element | `tagName`、`attributes`、`getAttribute` `hasAttribute` `setAttribute` `removeAttribute`、`before` `after` `prepend` `append` `replace` `setInnerContent`（`{ html: true }` 時不跳脫）、`remove` `removeAndKeepContent`、`onEndTag(end => end.before/after/remove)` |
+| Text / Comment | `text`、`replace` `before` `after` `remove`；文字 handler 收到比對到的元素（含後代）裡的文字 |
+| Document | `doctype`、`text`、`comments`、`end(end => end.append())` |
+
+和 Cloudflare 的差異：**整份 HTML 讀完才處理**（大檔案會用比較多記憶體，第一個位元組也比較晚送出）；一個文字節點只呼叫一次 `text()`（`lastInTextNode` 一律是 `true`）；不支援 `:nth-child` 等其他虛擬類別。
 
 ## Static Assets
 

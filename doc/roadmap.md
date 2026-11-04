@@ -10,7 +10,17 @@
 | 0.4.0 | R2 進階 | S3 相容 API（SigV4 驗證：List/Get/Put/Head/Delete/Copy、multipart）；binding 的 `createMultipartUpload` | ✓ |
 | 0.5.0 | 沙箱 | Node 權限模型（只能讀應用資料夾、不能開子程序）、記憶體上限、請求逾時、乾淨的 `process.env` | ✓ |
 | 0.6.0 | wrangler 相容 | `wrangler.toml`、`--env` 多環境、模組規則（`import` 文字 / 資料 / wasm）、`rucloud kv` / `rucloud r2` 指令 | ✓ |
-| 0.7.0 | 其餘 | `HTMLRewriter`（子集）等，依使用情況決定 | |
+| 0.7.0 | HTMLRewriter | `HTMLRewriter` 子集（選擇器、element/text/comments/document handler） | ✓ |
+
+## 之後可能做的
+
+| 主題 | 內容 |
+|---|---|
+| 串流 HTMLRewriter | 邊讀邊改，降低大頁面的記憶體與延遲 |
+| Workflows | 持久化的多步驟工作（`step.do`、`step.sleep`），用 SQLite 記錄進度 |
+| Hyperdrive | 直接把連線字串交給 Worker（`env.HYPERDRIVE.connectionString`） |
+| 部署 API | 遠端上傳新版本、版本紀錄與 rollback |
+| Durable Object 逐出 | 閒置的物件從記憶體移除，關閉 SQLite 連線 |
 
 ## 不打算做的
 

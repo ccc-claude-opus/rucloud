@@ -61,6 +61,7 @@ flowchart LR
 | Workers AI（`env.AI.run`） | `ai` | ✓ 轉給 OpenAI 相容後端 |
 | AI Gateway（log、快取、限流、重試） | `rucloud.toml` 的 `[ai_gateway]` | ✓ |
 | `import … from 'cloudflare:workers'`、`caches.default` | — | ✓ |
+| `HTMLRewriter` | — | ✓ 子集（不串流） |
 
 完整的 API 對照與差異見 [doc/bindings.md](doc/bindings.md)。
 
