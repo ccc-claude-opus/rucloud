@@ -24,8 +24,18 @@ pub async fn run(http: &reqwest::Client, model: &str, inputs: &Value) -> Result<
     if let Some(text) = inputs.get("text") {
         // 文字 embedding：{text: string | string[]} → {shape, data}
         let model = std::env::var("RUCLOUD_AI_EMBEDDING_MODEL").unwrap_or_else(|_| model.to_string());
-        let res: Value = post("/embeddings", json!({ "model": model, "input": text })).send().await?.error_for_status()?.json().await?;
-        let data: Vec<Value> = res["data"].as_array().into_iter().flatten().map(|d| d["embedding"].clone()).collect();
+        let res: Value = post("/embeddings", json!({ "model": model, "input": text }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let data: Vec<Value> = res["data"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|d| d["embedding"].clone())
+            .collect();
         let dims = data.first().and_then(|d| d.as_array()).map(|a| a.len()).unwrap_or(0);
         return Ok(json!({ "shape": [data.len(), dims], "data": data }));
     }

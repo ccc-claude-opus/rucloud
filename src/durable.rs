@@ -31,7 +31,10 @@ impl DoStore {
     pub fn op(&self, ns: &str, id: &str, req: &Value) -> Result<Value> {
         let mut conn = self.conn.lock().unwrap();
         let strs = |k: &str| -> Vec<String> {
-            req[k].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default()
+            req[k]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default()
         };
         Ok(match req["op"].as_str().unwrap_or("") {
             "get" => {

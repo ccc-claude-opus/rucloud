@@ -84,7 +84,12 @@ pub fn router(hub: Arc<Hub>) -> Router {
 
 async fn auth(State(hub): S, req: Request, next: Next) -> Response {
     // 路徑是 /b/<應用>/…，token 必須是那個應用的
-    let app = req.uri().path().strip_prefix("/b/").and_then(|p| p.split('/').next()).map(|a| urlencoding::decode(a).map(|s| s.into_owned()).unwrap_or_default());
+    let app = req
+        .uri()
+        .path()
+        .strip_prefix("/b/")
+        .and_then(|p| p.split('/').next())
+        .map(|a| urlencoding::decode(a).map(|s| s.into_owned()).unwrap_or_default());
     let expected = app.and_then(|a| hub.apps.get(&a).map(|a| a.token.clone()));
     if expected.is_none_or(|t| req.headers().get("x-rucloud-token").is_none_or(|h| h.as_bytes() != t.as_bytes())) {
         return ApiError(StatusCode::FORBIDDEN, "token 不對".into()).into_response();
@@ -96,7 +101,11 @@ async fn auth(State(hub): S, req: Request, next: Next) -> Response {
 
 async fn d1(State(hub): S, Path((app, binding, op)): Path<(String, String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
-    let db = app.d1.get(&binding).cloned().ok_or_else(|| not_found(&format!("D1 綁定 {binding}")))?;
+    let db = app
+        .d1
+        .get(&binding)
+        .cloned()
+        .ok_or_else(|| not_found(&format!("D1 綁定 {binding}")))?;
     let out = blocking(move || -> anyhow::Result<Value> {
         Ok(match op.as_str() {
             "query" => {
@@ -167,7 +176,9 @@ async fn kv_delete(State(hub): S, Path((app, ns)): Path<(String, String)>, Query
 async fn kv_list(State(hub): S, Path((app, ns)): Path<(String, String)>, Query(q): Query<KvQuery>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
     let kv = app.kv.clone();
-    Ok(Json(blocking(move || kv.list(&ns, q.prefix.as_deref().unwrap_or(""), q.limit.unwrap_or(1000), q.cursor.as_deref())).await?))
+    Ok(Json(
+        blocking(move || kv.list(&ns, q.prefix.as_deref().unwrap_or(""), q.limit.unwrap_or(1000), q.cursor.as_deref())).await?,
+    ))
 }
 
 // ---------- R2 ----------
@@ -185,7 +196,10 @@ struct R2Query {
 }
 
 fn bucket(app: &App, binding: &str) -> R<String> {
-    app.r2_buckets.get(binding).cloned().ok_or_else(|| not_found(&format!("R2 綁定 {binding}")))
+    app.r2_buckets
+        .get(binding)
+        .cloned()
+        .ok_or_else(|| not_found(&format!("R2 綁定 {binding}")))
 }
 
 async fn r2_head(State(hub): S, Path((app, binding)): Path<(String, String)>, Query(q): Query<R2Query>) -> R<Response> {
@@ -216,7 +230,10 @@ async fn r2_get(State(hub): S, Path((app, binding)): Path<(String, String)>, Que
     let mut f = tokio::fs::File::open(r2.file_path(&b, &key)).await.map_err(|e| anyhow!(e))?;
     f.seek(std::io::SeekFrom::Start(offset)).await.map_err(|e| anyhow!(e))?;
     let mut h = HeaderMap::new();
-    h.insert("x-r2-object", HeaderValue::from_str(&urlencoding::encode(&meta.to_string())).unwrap());
+    h.insert(
+        "x-r2-object",
+        HeaderValue::from_str(&urlencoding::encode(&meta.to_string())).unwrap(),
+    );
     if offset != 0 || length != size {
         h.insert("x-r2-range", HeaderValue::from_str(&format!("{offset},{length}")).unwrap());
     }
@@ -237,9 +254,19 @@ async fn r2_put(State(hub): S, Path((app, binding)): Path<(String, String)>, Que
     // 一邊收一邊寫暫存檔、算 MD5，不把整個物件放進記憶體
     let tmp = r2.tmp_path();
     let got = crate::r2::receive(req.into_body(), false, &tmp).await?;
-    let http = if opts["httpMetadata"].is_object() { opts["httpMetadata"].clone() } else { json!({}) };
-    let custom = if opts["customMetadata"].is_object() { opts["customMetadata"].clone() } else { json!({}) };
-    Ok(Json(blocking(move || r2.commit(&b, &key, &tmp, got.size, &got.md5, &http, &custom)).await?))
+    let http = if opts["httpMetadata"].is_object() {
+        opts["httpMetadata"].clone()
+    } else {
+        json!({})
+    };
+    let custom = if opts["customMetadata"].is_object() {
+        opts["customMetadata"].clone()
+    } else {
+        json!({})
+    };
+    Ok(Json(
+        blocking(move || r2.commit(&b, &key, &tmp, got.size, &got.md5, &http, &custom)).await?,
+    ))
 }
 
 async fn r2_delete(State(hub): S, Path((app, binding)): Path<(String, String)>, Query(q): Query<R2Query>) -> R<StatusCode> {
@@ -262,7 +289,13 @@ async fn r2_list(State(hub): S, Path((app, binding)): Path<(String, String)>, Qu
     let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
     Ok(Json(
         blocking(move || {
-            r2.list(&b, q.prefix.as_deref().unwrap_or(""), q.limit.unwrap_or(1000), q.cursor.as_deref(), q.delimiter.as_deref())
+            r2.list(
+                &b,
+                q.prefix.as_deref().unwrap_or(""),
+                q.limit.unwrap_or(1000),
+                q.cursor.as_deref(),
+                q.delimiter.as_deref(),
+            )
         })
         .await?,
     ))
@@ -273,9 +306,21 @@ async fn r2_list(State(hub): S, Path((app, binding)): Path<(String, String)>, Qu
 async fn mpu_create(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
     let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
-    let key = body["key"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| anyhow!("R2 的 key 不能是空的"))?.to_string();
-    let http = if body["httpMetadata"].is_object() { body["httpMetadata"].clone() } else { json!({}) };
-    let custom = if body["customMetadata"].is_object() { body["customMetadata"].clone() } else { json!({}) };
+    let key = body["key"]
+        .as_str()
+        .filter(|k| !k.is_empty())
+        .ok_or_else(|| anyhow!("R2 的 key 不能是空的"))?
+        .to_string();
+    let http = if body["httpMetadata"].is_object() {
+        body["httpMetadata"].clone()
+    } else {
+        json!({})
+    };
+    let custom = if body["customMetadata"].is_object() {
+        body["customMetadata"].clone()
+    } else {
+        json!({})
+    };
     let id = blocking(move || r2.create_upload(&b, &key, &http, &custom)).await?;
     Ok(Json(json!({ "uploadId": id })))
 }
@@ -311,7 +356,12 @@ async fn mpu_complete(State(hub): S, Path((app, binding)): Path<(String, String)
         .as_array()
         .into_iter()
         .flatten()
-        .map(|p| (p["partNumber"].as_u64().unwrap_or(0) as u32, p["etag"].as_str().unwrap_or_default().to_string()))
+        .map(|p| {
+            (
+                p["partNumber"].as_u64().unwrap_or(0) as u32,
+                p["etag"].as_str().unwrap_or_default().to_string(),
+            )
+        })
         .collect();
     Ok(Json(blocking(move || r2.complete_upload(&id, &parts)).await?))
 }
@@ -336,7 +386,9 @@ async fn queue_send(State(hub): S, Path((_app, queue)): Path<(String, String)>, 
 async fn ratelimit(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
     let key = body["key"].as_str().map(String::from).unwrap_or_else(|| body["key"].to_string());
-    let ok = app.rate_limit(&binding, &key).ok_or_else(|| not_found(&format!("限流綁定 {binding}")))?;
+    let ok = app
+        .rate_limit(&binding, &key)
+        .ok_or_else(|| not_found(&format!("限流綁定 {binding}")))?;
     Ok(Json(json!({ "success": ok })))
 }
 
@@ -351,7 +403,12 @@ async fn do_storage(State(hub): S, Path((app, ns, id)): Path<(String, String, St
 /// stub.fetch() / stub.method()：轉給「擁有」這個 id 的 Worker 程序
 async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String, String, String)>, mut req: Request) -> R<Response> {
     let app = hub.app(&app)?;
-    let do_url = req.headers().get("x-rucloud-do-url").and_then(|v| v.to_str().ok()).unwrap_or("http://do/").to_string();
+    let do_url = req
+        .headers()
+        .get("x-rucloud-do-url")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http://do/")
+        .to_string();
     *req.uri_mut() = "/__rucloud/do".parse().unwrap();
     let extra = [
         ("x-rucloud-kind", "do".to_string()),
@@ -368,14 +425,18 @@ async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String
 
 async fn vectorize(State(hub): S, Path((app, binding, op)): Path<(String, String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
-    let (index, metric) = app.vector_metric(&binding).ok_or_else(|| not_found(&format!("Vectorize 綁定 {binding}")))?;
+    let (index, metric) = app
+        .vector_metric(&binding)
+        .ok_or_else(|| not_found(&format!("Vectorize 綁定 {binding}")))?;
     let store = app.vectors.clone();
     Ok(Json(blocking(move || store.op(&index, &metric, &op, &body)).await?))
 }
 
 async fn ai_run(State(hub): S, Path(app): Path<String>, Json(body): Json<Value>) -> R<Json<Value>> {
     let app = hub.app(&app)?;
-    Ok(Json(crate::ai::run(&app.http, body["model"].as_str().unwrap_or(""), &body["inputs"]).await?))
+    Ok(Json(
+        crate::ai::run(&app.http, body["model"].as_str().unwrap_or(""), &body["inputs"]).await?,
+    ))
 }
 
 // ---------- Assets、Service bindings ----------
@@ -404,7 +465,12 @@ async fn service(State(hub): S, Path((app, binding)): Path<(String, String)>, mu
         .find(|s| s.binding == binding)
         .ok_or_else(|| not_found(&format!("service 綁定 {binding}")))?;
     let target = hub.app(&target.service)?;
-    let url = req.headers().get("x-rucloud-svc-url").and_then(|v| v.to_str().ok()).unwrap_or("http://localhost/").to_string();
+    let url = req
+        .headers()
+        .get("x-rucloud-svc-url")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http://localhost/")
+        .to_string();
     let (host, pq) = match url.split_once("://").map(|(_, r)| r.split_once('/').unwrap_or((r, ""))) {
         Some((h, p)) => (h.to_string(), format!("/{p}")),
         None => ("localhost".into(), "/".into()),

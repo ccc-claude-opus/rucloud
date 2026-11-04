@@ -44,7 +44,14 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         .tcp_nodelay(true)
         .build()?;
 
-    let ctx = Ctx { state_root: &state_root, node: &cfg.node, host_js: &host_js, bindings_url: &bindings_url, http, dev };
+    let ctx = Ctx {
+        state_root: &state_root,
+        node: &cfg.node,
+        host_js: &host_js,
+        bindings_url: &bindings_url,
+        http,
+        dev,
+    };
     let mut apps: Vec<(Arc<App>, &crate::config::AppEntry)> = Vec::new();
     for entry in &cfg.apps {
         let app = App::load(entry, &ctx)?;
@@ -69,10 +76,16 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         }
         if let Some(port) = entry.port {
             let addr: SocketAddr = format!("{}:{port}", cfg.bind).parse().context("bind 位址不對")?;
-            let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("無法監聽 {addr}"))?;
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("無法監聽 {addr}"))?;
             let router = Router::new().fallback(any(gateway::app_handler)).with_state(app.clone());
             tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await });
-            let shown = if cfg.bind == "0.0.0.0" { "localhost".to_string() } else { cfg.bind.clone() };
+            let shown = if cfg.bind == "0.0.0.0" {
+                "localhost".to_string()
+            } else {
+                cfg.bind.clone()
+            };
             tracing::info!("[{}] http://{shown}:{port}  ({})", app.name, app.dir.display());
         }
         for cron in &app.cfg.triggers.crons {
@@ -91,7 +104,9 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     }
     if let Some(edge) = &cfg.edge {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, edge.port).parse()?;
-        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("無法監聽 {addr}"))?;
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("無法監聽 {addr}"))?;
         let router = Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes));
         tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await });
         tracing::info!("edge：http://<應用名稱>.localhost:{}（依 Host 分派）", edge.port);
@@ -99,7 +114,9 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     if let Some(gw_cfg) = cfg.ai_gateway.clone() {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, gw_cfg.port).parse()?;
         let gw = crate::ai_gateway::Gateway::new(gw_cfg, &state_root)?;
-        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("無法監聽 {addr}"))?;
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("無法監聽 {addr}"))?;
         tokio::spawn(async move { axum::serve(listener, crate::ai_gateway::router(gw)).await });
         tracing::info!("AI Gateway：http://{addr}/<gateway>/<provider>/...");
     }
@@ -108,7 +125,9 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, s3_cfg.port).parse()?;
         let all: Vec<Arc<App>> = apps.iter().map(|(a, _)| a.clone()).collect();
         let s3 = crate::s3::S3::new(s3_cfg, &all);
-        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("無法監聽 {addr}"))?;
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("無法監聽 {addr}"))?;
         tokio::spawn(async move { axum::serve(listener, crate::s3::router(s3)).await });
         tracing::info!("R2 的 S3 API：http://{addr}（path-style）");
     }
@@ -145,7 +164,11 @@ async fn alarm_loop(app: Arc<App>) {
         tick.tick().await;
         let now = chrono::Utc::now().timestamp_millis();
         let store = app.durable.clone();
-        let due = tokio::task::spawn_blocking(move || store.take_due_alarms(now)).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+        let due = tokio::task::spawn_blocking(move || store.take_due_alarms(now))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
         for (ns, id, _) in due {
             let app = app.clone();
             tokio::spawn(async move {
@@ -201,7 +224,12 @@ fn fingerprint(dir: &Path) -> (u64, u128) {
                 stack.push(e.path());
             } else {
                 count += 1;
-                sum += meta.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+                sum += meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0);
             }
         }
     }

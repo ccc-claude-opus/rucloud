@@ -34,8 +34,15 @@ impl AppRef {
     fn resolve(&self) -> Result<Resolved> {
         let dir = self.app.canonicalize().with_context(|| format!("找不到 {}", self.app.display()))?;
         let cfg = config::load_wrangler(&dir, self.env.as_deref())?;
-        let name = cfg.name.clone().unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned());
-        Ok(Resolved { state: self.state.join(name), dir, cfg })
+        let name = cfg
+            .name
+            .clone()
+            .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned());
+        Ok(Resolved {
+            state: self.state.join(name),
+            dir,
+            cfg,
+        })
     }
 }
 
@@ -186,7 +193,12 @@ fn open_d1(r: &Resolved, database: &str) -> Result<(D1, PathBuf, PathBuf)> {
 
 pub fn d1(cmd: D1Cmd) -> Result<()> {
     match cmd {
-        D1Cmd::Execute { app, database, file, command } => {
+        D1Cmd::Execute {
+            app,
+            database,
+            file,
+            command,
+        } => {
             let r = app.resolve()?;
             let (db, path, _) = open_d1(&r, &database)?;
             match (file, command) {
@@ -199,14 +211,18 @@ pub fn d1(cmd: D1Cmd) -> Result<()> {
                 _ => bail!("請給 --file 或 --command"),
             }
         }
-        D1Cmd::Migrations { cmd: MigrationsCmd::List { app, database } } => {
+        D1Cmd::Migrations {
+            cmd: MigrationsCmd::List { app, database },
+        } => {
             let r = app.resolve()?;
             let (db, _, dir) = open_d1(&r, &database)?;
             for (name, applied) in db.migrations(&dir)? {
                 println!("{} {name}", if applied { "✓" } else { "·" });
             }
         }
-        D1Cmd::Migrations { cmd: MigrationsCmd::Apply { app, database } } => {
+        D1Cmd::Migrations {
+            cmd: MigrationsCmd::Apply { app, database },
+        } => {
             let r = app.resolve()?;
             let (db, _, dir) = open_d1(&r, &database)?;
             let done = db.migrate(&dir)?;
@@ -217,7 +233,9 @@ pub fn d1(cmd: D1Cmd) -> Result<()> {
                 println!("已套用 {name}");
             }
         }
-        D1Cmd::Migrations { cmd: MigrationsCmd::Create { app, database, name } } => {
+        D1Cmd::Migrations {
+            cmd: MigrationsCmd::Create { app, database, name },
+        } => {
             let r = app.resolve()?;
             let (db, _, dir) = open_d1(&r, &database)?;
             std::fs::create_dir_all(&dir)?;
@@ -242,7 +260,15 @@ fn kv_store(r: &Resolved, binding: &str) -> Result<Kv> {
 
 pub fn kv(cmd: KvCmd) -> Result<()> {
     match cmd {
-        KvCmd::Put { app, key, value, binding, path, ttl, metadata } => {
+        KvCmd::Put {
+            app,
+            key,
+            value,
+            binding,
+            path,
+            ttl,
+            metadata,
+        } => {
             let r = app.resolve()?;
             let kv = kv_store(&r, &binding)?;
             let bytes = match (value, path) {
@@ -291,20 +317,32 @@ pub fn kv(cmd: KvCmd) -> Result<()> {
 // ---------- R2 ----------
 
 fn r2_store(r: &Resolved, bucket: &str) -> Result<R2> {
-    if !r.cfg.r2_buckets.iter().any(|b| b.bucket_name.as_deref().unwrap_or(&b.binding) == bucket) {
+    if !r
+        .cfg
+        .r2_buckets
+        .iter()
+        .any(|b| b.bucket_name.as_deref().unwrap_or(&b.binding) == bucket)
+    {
         bail!("沒有叫 {bucket} 的 R2 bucket");
     }
     R2::open(&r.state.join("r2"))
 }
 
 fn split_path(p: &str) -> Result<(&str, &str)> {
-    p.split_once('/').filter(|(b, k)| !b.is_empty() && !k.is_empty()).context("路徑要寫成 <bucket>/<key>")
+    p.split_once('/')
+        .filter(|(b, k)| !b.is_empty() && !k.is_empty())
+        .context("路徑要寫成 <bucket>/<key>")
 }
 
 pub fn r2(cmd: R2Cmd) -> Result<()> {
     let R2Cmd::Object { cmd } = cmd;
     match cmd {
-        R2ObjectCmd::Put { app, path, file, content_type } => {
+        R2ObjectCmd::Put {
+            app,
+            path,
+            file,
+            content_type,
+        } => {
             let r = app.resolve()?;
             let (bucket, key) = split_path(&path)?;
             let store = r2_store(&r, bucket)?;
@@ -313,8 +351,21 @@ pub fn r2(cmd: R2Cmd) -> Result<()> {
             std::fs::write(&tmp, &data)?;
             let ct = content_type.unwrap_or_else(|| mime_guess::from_path(&file).first_or_octet_stream().to_string());
             let etag = hex::encode(<md5::Md5 as md5::Digest>::digest(&data));
-            let obj = store.commit(bucket, key, &tmp, data.len() as u64, &etag, &json!({ "contentType": ct }), &json!({}))?;
-            println!("{} {} bytes etag {}", obj["key"].as_str().unwrap_or(""), obj["size"], obj["etag"].as_str().unwrap_or(""));
+            let obj = store.commit(
+                bucket,
+                key,
+                &tmp,
+                data.len() as u64,
+                &etag,
+                &json!({ "contentType": ct }),
+                &json!({}),
+            )?;
+            println!(
+                "{} {} bytes etag {}",
+                obj["key"].as_str().unwrap_or(""),
+                obj["size"],
+                obj["etag"].as_str().unwrap_or("")
+            );
         }
         R2ObjectCmd::Get { app, path, file } => {
             let r = app.resolve()?;

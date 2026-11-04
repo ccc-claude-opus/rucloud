@@ -119,7 +119,22 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
     match Cli::parse().cmd {
-        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port, no_sandbox, memory_mb, max_block_ms, env, d1_migrate } => {
+        Cmd::Dev {
+            app,
+            port,
+            ip,
+            instances,
+            state,
+            d1_init,
+            no_watch,
+            node,
+            s3_port,
+            no_sandbox,
+            memory_mb,
+            max_block_ms,
+            env,
+            d1_migrate,
+        } => {
             let s3 = match s3_port {
                 Some(port) => Some(s3::S3Cfg {
                     port,
@@ -165,10 +180,20 @@ async fn main() -> Result<()> {
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
         Cmd::R2 { cmd } => cli::r2(cmd),
-        Cmd::AiGateway { port, state, cache_ttl, retries } => {
+        Cmd::AiGateway {
+            port,
+            state,
+            cache_ttl,
+            retries,
+        } => {
             std::fs::create_dir_all(&state)?;
             let gw = ai_gateway::Gateway::new(
-                ai_gateway::GatewayCfg { port, cache_ttl, retries, ..Default::default() },
+                ai_gateway::GatewayCfg {
+                    port,
+                    cache_ttl,
+                    retries,
+                    ..Default::default()
+                },
                 &state,
             )?;
             let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;

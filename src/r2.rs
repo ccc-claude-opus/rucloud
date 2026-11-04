@@ -31,7 +31,10 @@ impl R2 {
                http_metadata TEXT NOT NULL, custom_metadata TEXT NOT NULL,
                PRIMARY KEY (bucket, key)) WITHOUT ROWID;",
         )?;
-        Ok(Self { root: root.to_path_buf(), conn: Mutex::new(conn) })
+        Ok(Self {
+            root: root.to_path_buf(),
+            conn: Mutex::new(conn),
+        })
     }
 
     pub fn file_path(&self, bucket: &str, key: &str) -> PathBuf {
@@ -54,9 +57,26 @@ impl R2 {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO objects VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![bucket, key, size as i64, etag, version, uploaded, http.to_string(), custom.to_string()],
+            params![
+                bucket,
+                key,
+                size as i64,
+                etag,
+                version,
+                uploaded,
+                http.to_string(),
+                custom.to_string()
+            ],
         )?;
-        Ok(object_json(key, size as i64, etag, &version, uploaded, http.clone(), custom.clone()))
+        Ok(object_json(
+            key,
+            size as i64,
+            etag,
+            &version,
+            uploaded,
+            http.clone(),
+            custom.clone(),
+        ))
     }
 
     pub fn head(&self, bucket: &str, key: &str) -> Result<Option<Value>> {
@@ -80,8 +100,17 @@ impl R2 {
     }
 
     /// 複製物件；metadata 給 None 就沿用來源的
-    pub fn copy(&self, src_bucket: &str, src_key: &str, bucket: &str, key: &str, metadata: Option<(&Value, &Value)>) -> Result<Option<Value>> {
-        let Some(src) = self.head(src_bucket, src_key)? else { return Ok(None) };
+    pub fn copy(
+        &self,
+        src_bucket: &str,
+        src_key: &str,
+        bucket: &str,
+        key: &str,
+        metadata: Option<(&Value, &Value)>,
+    ) -> Result<Option<Value>> {
+        let Some(src) = self.head(src_bucket, src_key)? else {
+            return Ok(None);
+        };
         let tmp = self.tmp_path();
         std::fs::copy(self.file_path(src_bucket, src_key), &tmp)?;
         let (http, custom) = match metadata {
@@ -89,7 +118,15 @@ impl R2 {
             None => (src["httpMetadata"].clone(), src["customMetadata"].clone()),
         };
         let size = src["size"].as_u64().unwrap_or(0);
-        Ok(Some(self.commit(bucket, key, &tmp, size, src["etag"].as_str().unwrap_or(""), &http, &custom)?))
+        Ok(Some(self.commit(
+            bucket,
+            key,
+            &tmp,
+            size,
+            src["etag"].as_str().unwrap_or(""),
+            &http,
+            &custom,
+        )?))
     }
 
     // ---------- multipart upload ----------
@@ -99,7 +136,14 @@ impl R2 {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT INTO uploads VALUES (?, ?, ?, ?, ?, ?)",
-            params![id, bucket, key, http.to_string(), custom.to_string(), chrono::Utc::now().timestamp_millis()],
+            params![
+                id,
+                bucket,
+                key,
+                http.to_string(),
+                custom.to_string(),
+                chrono::Utc::now().timestamp_millis()
+            ],
         )?;
         Ok(id)
     }
@@ -108,7 +152,9 @@ impl R2 {
     pub fn upload(&self, upload_id: &str) -> Result<Option<(String, String)>> {
         let conn = self.conn.lock().unwrap();
         Ok(conn
-            .query_row("SELECT bucket, key FROM uploads WHERE upload_id = ?", [upload_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .query_row("SELECT bucket, key FROM uploads WHERE upload_id = ?", [upload_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .optional()?)
     }
 
@@ -121,7 +167,10 @@ impl R2 {
         std::fs::create_dir_all(dest.parent().unwrap())?;
         std::fs::rename(tmp, &dest)?;
         let conn = self.conn.lock().unwrap();
-        conn.execute("INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?)", params![upload_id, n, etag, size as i64])?;
+        conn.execute(
+            "INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?)",
+            params![upload_id, n, etag, size as i64],
+        )?;
         Ok(())
     }
 
@@ -144,7 +193,8 @@ impl R2 {
         let known: std::collections::HashMap<u32, String> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt = conn.prepare("SELECT n, etag FROM parts WHERE upload_id = ?")?;
-            stmt.query_map([upload_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            stmt.query_map([upload_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?
         };
         let tmp = self.tmp_path();
         let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
@@ -307,5 +357,9 @@ pub async fn receive(body: axum::body::Body, aws_chunked: bool, tmp: &Path) -> R
         }
     }
     file.flush().await?;
-    Ok(Received { size, md5: hex::encode(md5.finalize()), sha256: hex::encode(sha.finalize()) })
+    Ok(Received {
+        size,
+        md5: hex::encode(md5.finalize()),
+        sha256: hex::encode(sha.finalize()),
+    })
 }

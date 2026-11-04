@@ -30,7 +30,10 @@ impl VectorStore {
                idx TEXT NOT NULL, id TEXT NOT NULL, namespace TEXT, vals BLOB NOT NULL, metadata TEXT NOT NULL,
                PRIMARY KEY (idx, id)) WITHOUT ROWID;",
         )?;
-        Ok(Self { conn: Mutex::new(conn), cache: Mutex::new(HashMap::new()) })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            cache: Mutex::new(HashMap::new()),
+        })
     }
 
     pub fn op(&self, index: &str, metric: &str, op: &str, req: &Value) -> Result<Value> {
@@ -51,7 +54,11 @@ impl VectorStore {
                     } else {
                         "INSERT OR REPLACE INTO vectors VALUES (?, ?, ?, ?, ?)"
                     };
-                    let meta = if v["metadata"].is_object() { v["metadata"].to_string() } else { "{}".into() };
+                    let meta = if v["metadata"].is_object() {
+                        v["metadata"].to_string()
+                    } else {
+                        "{}".into()
+                    };
                     tx.execute(sql, params![index, id, v["namespace"].as_str(), vals, meta])?;
                     ids.push(id);
                 }
@@ -71,7 +78,13 @@ impl VectorStore {
             "getByIds" => {
                 let items = self.items(index)?;
                 let want: Vec<&str> = req["ids"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect();
-                Ok(Value::Array(items.iter().filter(|i| want.contains(&i.id.as_str())).map(|i| item_json(i, None, true, true)).collect()))
+                Ok(Value::Array(
+                    items
+                        .iter()
+                        .filter(|i| want.contains(&i.id.as_str()))
+                        .map(|i| item_json(i, None, true, true))
+                        .collect(),
+                ))
             }
             "describe" => {
                 let items = self.items(index)?;
@@ -79,7 +92,10 @@ impl VectorStore {
                 Ok(json!({ "vectorCount": items.len(), "dimensions": dims, "config": { "metric": metric, "dimensions": dims } }))
             }
             "query" => {
-                let q: Vec<f32> = req["vector"].as_array().map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
+                let q: Vec<f32> = req["vector"]
+                    .as_array()
+                    .map(|a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect())
+                    .unwrap_or_default();
                 let opts = &req["options"];
                 let top_k = opts["topK"].as_u64().unwrap_or(5).clamp(1, 100) as usize;
                 let rv = opts["returnValues"].as_bool().unwrap_or(false);
@@ -119,7 +135,13 @@ impl VectorStore {
                 let raw: Vec<u8> = r.get(2)?;
                 let values: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
                 let meta: String = r.get(3)?;
-                Ok(Item { id: r.get(0)?, namespace: r.get(1)?, norm: norm(&values), values, metadata: serde_json::from_str(&meta).unwrap_or(json!({})) })
+                Ok(Item {
+                    id: r.get(0)?,
+                    namespace: r.get(1)?,
+                    norm: norm(&values),
+                    values,
+                    metadata: serde_json::from_str(&meta).unwrap_or(json!({})),
+                })
             })?
             .collect::<rusqlite::Result<_>>()?;
         let items = Arc::new(items);
@@ -137,7 +159,13 @@ fn score(metric: &str, q: &[f32], qn: f32, i: &Item) -> f32 {
     match metric {
         "dot-product" => dot,
         "euclidean" => q.iter().zip(&i.values).map(|(a, b)| (a - b) * (a - b)).sum::<f32>().sqrt(),
-        _ => if qn == 0.0 || i.norm == 0.0 { 0.0 } else { dot / (qn * i.norm) },
+        _ => {
+            if qn == 0.0 || i.norm == 0.0 {
+                0.0
+            } else {
+                dot / (qn * i.norm)
+            }
+        }
     }
 }
 
@@ -193,15 +221,30 @@ mod tests {
     fn cosine_query_with_filter() {
         let dir = std::env::temp_dir().join(format!("rucloud-vec-{}", std::process::id()));
         let s = VectorStore::open(&dir.join("v.sqlite")).unwrap();
-        s.op("i", "cosine", "upsert", &json!({ "vectors": [
-            { "id": "a", "values": [1, 0], "metadata": { "lang": "zh" } },
-            { "id": "b", "values": [0, 1], "metadata": { "lang": "en" } },
-            { "id": "c", "values": [0.9, 0.1], "metadata": { "lang": "en" } },
-        ]})).unwrap();
-        let r = s.op("i", "cosine", "query", &json!({ "vector": [1, 0], "options": { "topK": 2 } })).unwrap();
+        s.op(
+            "i",
+            "cosine",
+            "upsert",
+            &json!({ "vectors": [
+                { "id": "a", "values": [1, 0], "metadata": { "lang": "zh" } },
+                { "id": "b", "values": [0, 1], "metadata": { "lang": "en" } },
+                { "id": "c", "values": [0.9, 0.1], "metadata": { "lang": "en" } },
+            ]}),
+        )
+        .unwrap();
+        let r = s
+            .op("i", "cosine", "query", &json!({ "vector": [1, 0], "options": { "topK": 2 } }))
+            .unwrap();
         assert_eq!(r["matches"][0]["id"], "a");
         assert_eq!(r["matches"][1]["id"], "c");
-        let r = s.op("i", "cosine", "query", &json!({ "vector": [1, 0], "options": { "filter": { "lang": "en" } } })).unwrap();
+        let r = s
+            .op(
+                "i",
+                "cosine",
+                "query",
+                &json!({ "vector": [1, 0], "options": { "filter": { "lang": "en" } } }),
+            )
+            .unwrap();
         assert_eq!(r["matches"][0]["id"], "c");
         let _ = std::fs::remove_dir_all(dir);
     }

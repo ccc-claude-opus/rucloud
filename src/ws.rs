@@ -12,7 +12,10 @@ use tokio::net::TcpStream;
 const MAX_HEAD: usize = 64 * 1024;
 
 pub fn is_upgrade(headers: &HeaderMap) -> bool {
-    headers.get(header::UPGRADE).and_then(|v| v.to_str().ok()).is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+    headers
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
 /// 把 upgrade 請求轉給 127.0.0.1:port。headers 是已經整理好（含內部標頭）的請求標頭。
@@ -20,12 +23,18 @@ pub async fn tunnel(mut req: Request, port: u16, path: &str, headers: &HeaderMap
     let upgrade = req.headers().get(header::UPGRADE).cloned();
     let on_upgrade = hyper::upgrade::on(&mut req);
 
-    let mut head = format!("{} {path} HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\nconnection: Upgrade\r\n", req.method());
+    let mut head = format!(
+        "{} {path} HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\nconnection: Upgrade\r\n",
+        req.method()
+    );
     if let Some(u) = upgrade.as_ref().and_then(|u| u.to_str().ok()) {
         head.push_str(&format!("upgrade: {u}\r\n"));
     }
     for (k, v) in headers {
-        if matches!(k.as_str(), "host" | "connection" | "upgrade" | "content-length" | "transfer-encoding") {
+        if matches!(
+            k.as_str(),
+            "host" | "connection" | "upgrade" | "content-length" | "transfer-encoding"
+        ) {
             continue;
         }
         if let Ok(v) = v.to_str() {
@@ -57,7 +66,11 @@ pub async fn tunnel(mut req: Request, port: u16, path: &str, headers: &HeaderMap
     let text = String::from_utf8_lossy(&buf[..end]).into_owned();
     let rest = buf[end + 4..].to_vec();
     let mut lines = text.split("\r\n");
-    let status: u16 = lines.next().and_then(|l| l.split(' ').nth(1)).and_then(|s| s.parse().ok()).context("Worker 的回應格式不對")?;
+    let status: u16 = lines
+        .next()
+        .and_then(|l| l.split(' ').nth(1))
+        .and_then(|s| s.parse().ok())
+        .context("Worker 的回應格式不對")?;
     let mut builder = Response::builder().status(StatusCode::from_u16(status)?);
     let mut content_length = None;
     for line in lines {

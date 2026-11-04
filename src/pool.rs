@@ -77,7 +77,9 @@ impl Pool {
             return Some(self.slots[i % n].load(Ordering::Acquire)).filter(|p| *p != 0);
         }
         let start = self.rr.fetch_add(1, Ordering::Relaxed);
-        (0..n).map(|k| self.slots[(start + k) % n].load(Ordering::Acquire)).find(|p| *p != 0)
+        (0..n)
+            .map(|k| self.slots[(start + k) % n].load(Ordering::Acquire))
+            .find(|p| *p != 0)
     }
 
     pub fn restart(&self) {
@@ -87,17 +89,25 @@ impl Pool {
 
 async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
     let mut restart = pool.restart.subscribe();
-    let tag = if pool.len() > 1 { format!("{}#{i}", spec.app) } else { spec.app.clone() };
+    let tag = if pool.len() > 1 {
+        format!("{}#{i}", spec.app)
+    } else {
+        spec.app.clone()
+    };
     let mut backoff = Duration::from_millis(200);
     loop {
         let started = Instant::now();
         let mut cmd = Command::new(&spec.node);
         // --experimental-transform-types：TypeScript 的 enum、namespace 等也能直接跑
-        cmd.args(["--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--disable-warning=ExperimentalWarning", "--experimental-transform-types"])
-            .args(&spec.node_args)
-            .arg(&spec.host_js)
-            .current_dir(&spec.cwd)
-            .env_clear();
+        cmd.args([
+            "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+            "--disable-warning=ExperimentalWarning",
+            "--experimental-transform-types",
+        ])
+        .args(&spec.node_args)
+        .arg(&spec.host_js)
+        .current_dir(&spec.cwd)
+        .env_clear();
         for k in PASS_ENV {
             if let Ok(v) = std::env::var(k) {
                 cmd.env(k, v);
@@ -175,7 +185,9 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
 
 /// 每秒對 Worker 程序送一次 ping；一次 ping 等超過 max_block 就回傳（呼叫端會砍掉程序）
 async fn watchdog(pool: &Pool, spec: &WorkerSpec, i: usize) -> Duration {
-    let Some(limit) = spec.max_block else { return std::future::pending().await };
+    let Some(limit) = spec.max_block else {
+        return std::future::pending().await;
+    };
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let port = pool.slots[i].load(Ordering::Acquire);

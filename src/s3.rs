@@ -83,13 +83,19 @@ impl S3 {
     }
 
     fn store(&self, bucket: &str) -> R<Arc<R2>> {
-        let app = self.buckets.get(bucket).ok_or_else(|| err(StatusCode::NOT_FOUND, "NoSuchBucket", format!("找不到 bucket {bucket}")))?;
+        let app = self
+            .buckets
+            .get(bucket)
+            .ok_or_else(|| err(StatusCode::NOT_FOUND, "NoSuchBucket", format!("找不到 bucket {bucket}")))?;
         Ok(app.r2()?)
     }
 }
 
 pub fn router(s3: Arc<S3>) -> Router {
-    Router::new().fallback(handle).layer(axum::extract::DefaultBodyLimit::disable()).with_state(s3)
+    Router::new()
+        .fallback(handle)
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .with_state(s3)
 }
 
 async fn handle(State(s3): State<Arc<S3>>, req: Request) -> axum::response::Response {
@@ -102,11 +108,19 @@ async fn handle(State(s3): State<Arc<S3>>, req: Request) -> axum::response::Resp
 // ---------- 小工具 ----------
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn unesc(s: &str) -> String {
-    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// SigV4 用的 URI 編碼：除了 A-Z a-z 0-9 - _ . ~ 以外全部編碼
@@ -123,7 +137,9 @@ fn uri_encode(s: &str, keep_slash: bool) -> String {
 }
 
 fn decode(s: &str) -> String {
-    urlencoding::decode(&s.replace('+', "%20")).map(|c| c.into_owned()).unwrap_or_else(|_| s.to_string())
+    urlencoding::decode(&s.replace('+', "%20"))
+        .map(|c| c.into_owned())
+        .unwrap_or_else(|_| s.to_string())
 }
 
 fn parse_query(q: Option<&str>) -> Vec<(String, String)> {
@@ -144,15 +160,26 @@ fn hmac(key: &[u8], data: &str) -> Vec<u8> {
 }
 
 fn http_date(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default().format("%a, %d %b %Y %H:%M:%S GMT").to_string()
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
 }
 
 fn iso_date(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms).unwrap_or_default().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+    chrono::DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+        .to_string()
 }
 
 fn xml(status: StatusCode, body: String) -> axum::response::Response {
-    (status, [(header::CONTENT_TYPE, "application/xml")], format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{body}")).into_response()
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/xml")],
+        format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{body}"),
+    )
+        .into_response()
 }
 
 /// 抓出 <tag>…</tag> 的所有內容（S3 的請求 XML 都很單純，不需要完整的解析器）
@@ -179,7 +206,9 @@ fn verify(s3: &S3, method: &Method, path: &str, query: &[(String, String)], head
 
     let (credential, signed, signature, amz_date, payload, presigned) = if let Some(auth) = headers.get(header::AUTHORIZATION) {
         let auth = auth.to_str().map_err(|_| denied("Authorization 格式不對"))?;
-        let rest = auth.strip_prefix("AWS4-HMAC-SHA256").ok_or_else(|| denied("只支援 AWS4-HMAC-SHA256"))?;
+        let rest = auth
+            .strip_prefix("AWS4-HMAC-SHA256")
+            .ok_or_else(|| denied("只支援 AWS4-HMAC-SHA256"))?;
         let mut cred = "";
         let mut sh = "";
         let mut sig = "";
@@ -193,8 +222,19 @@ fn verify(s3: &S3, method: &Method, path: &str, query: &[(String, String)], head
                 sig = v;
             }
         }
-        let payload = if hv("x-amz-content-sha256").is_empty() { "UNSIGNED-PAYLOAD" } else { hv("x-amz-content-sha256") };
-        (cred.to_string(), sh.to_string(), sig.to_string(), hv("x-amz-date").to_string(), payload.to_string(), false)
+        let payload = if hv("x-amz-content-sha256").is_empty() {
+            "UNSIGNED-PAYLOAD"
+        } else {
+            hv("x-amz-content-sha256")
+        };
+        (
+            cred.to_string(),
+            sh.to_string(),
+            sig.to_string(),
+            hv("x-amz-date").to_string(),
+            payload.to_string(),
+            false,
+        )
     } else if qv("X-Amz-Algorithm") == Some("AWS4-HMAC-SHA256") {
         (
             qv("X-Amz-Credential").unwrap_or("").to_string(),
@@ -215,7 +255,9 @@ fn verify(s3: &S3, method: &Method, path: &str, query: &[(String, String)], head
     if scope[0] != s3.cfg.access_key_id {
         return Err(err(StatusCode::FORBIDDEN, "InvalidAccessKeyId", "不認識的 access key"));
     }
-    let when = chrono::NaiveDateTime::parse_from_str(&amz_date, "%Y%m%dT%H%M%SZ").map_err(|_| denied("X-Amz-Date 格式不對"))?.and_utc();
+    let when = chrono::NaiveDateTime::parse_from_str(&amz_date, "%Y%m%dT%H%M%SZ")
+        .map_err(|_| denied("X-Amz-Date 格式不對"))?
+        .and_utc();
     let now = chrono::Utc::now();
     if presigned {
         let expires: i64 = qv("X-Amz-Expires").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -226,8 +268,11 @@ fn verify(s3: &S3, method: &Method, path: &str, query: &[(String, String)], head
         return Err(err(StatusCode::FORBIDDEN, "RequestTimeTooSkewed", "請求時間和伺服器差太多"));
     }
 
-    let mut q: Vec<(String, String)> =
-        query.iter().filter(|(k, _)| k != "X-Amz-Signature").map(|(k, v)| (uri_encode(k, false), uri_encode(v, false))).collect();
+    let mut q: Vec<(String, String)> = query
+        .iter()
+        .filter(|(k, _)| k != "X-Amz-Signature")
+        .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
+        .collect();
     q.sort();
     let canonical_query = q.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&");
     let mut canonical_headers = String::new();
@@ -242,7 +287,10 @@ fn verify(s3: &S3, method: &Method, path: &str, query: &[(String, String)], head
     }
     let canonical = format!("{method}\n{path}\n{canonical_query}\n{canonical_headers}\n{signed}\n{payload}");
     let scope_str = scope[1..].join("/");
-    let to_sign = format!("AWS4-HMAC-SHA256\n{amz_date}\n{scope_str}\n{}", hex::encode(Sha256::digest(canonical.as_bytes())));
+    let to_sign = format!(
+        "AWS4-HMAC-SHA256\n{amz_date}\n{scope_str}\n{}",
+        hex::encode(Sha256::digest(canonical.as_bytes()))
+    );
     let mut key = hmac(format!("AWS4{}", s3.cfg.secret_access_key).as_bytes(), scope[1]);
     for part in &scope[2..] {
         key = hmac(&key, part);
@@ -268,7 +316,11 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
 
     // 虛擬主機風格：<bucket>.host
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("");
-    let vhost = host.split('.').next().filter(|b| host.contains('.') && s3.buckets.contains_key(*b)).map(String::from);
+    let vhost = host
+        .split('.')
+        .next()
+        .filter(|b| host.contains('.') && s3.buckets.contains_key(*b))
+        .map(String::from);
     let path = decode(raw_path.trim_start_matches('/'));
     let (bucket, key) = match vhost {
         Some(b) => (b, path),
@@ -284,9 +336,10 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
     let r2 = s3.store(&bucket)?;
     if key.is_empty() {
         return match method {
-            Method::GET if has("location") => {
-                Ok(xml(StatusCode::OK, "<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">auto</LocationConstraint>".into()))
-            }
+            Method::GET if has("location") => Ok(xml(
+                StatusCode::OK,
+                "<LocationConstraint xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">auto</LocationConstraint>".into(),
+            )),
             Method::GET => list_objects(r2, &bucket, &query).await,
             Method::HEAD => Ok(StatusCode::OK.into_response()),
             Method::POST if has("delete") => delete_objects(r2, &bucket, req).await,
@@ -296,9 +349,10 @@ async fn dispatch(s3: &S3, req: Request) -> R<axum::response::Response> {
     match method {
         Method::GET | Method::HEAD => get_object(r2, &bucket, &key, method == Method::HEAD, req.headers()).await,
         Method::PUT if has("partNumber") && has("uploadId") => {
-            let n: u32 = qv("partNumber").and_then(|v| v.parse().ok()).filter(|n| (1..=10000).contains(n)).ok_or_else(|| {
-                err(StatusCode::BAD_REQUEST, "InvalidArgument", "partNumber 要在 1–10000")
-            })?;
+            let n: u32 = qv("partNumber")
+                .and_then(|v| v.parse().ok())
+                .filter(|n| (1..=10000).contains(n))
+                .ok_or_else(|| err(StatusCode::BAD_REQUEST, "InvalidArgument", "partNumber 要在 1–10000"))?;
             upload_part(r2, &bucket, &qv("uploadId").unwrap_or_default(), n, req).await
         }
         Method::PUT if req.headers().contains_key("x-amz-copy-source") => copy_object(s3, r2, &bucket, &key, req.headers()).await,
@@ -340,7 +394,11 @@ fn list_buckets(s3: &S3) -> axum::response::Response {
         "<ListAllMyBucketsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Owner><ID>rucloud</ID><DisplayName>rucloud</DisplayName></Owner><Buckets>",
     );
     for name in s3.buckets.keys() {
-        out.push_str(&format!("<Bucket><Name>{}</Name><CreationDate>{}</CreationDate></Bucket>", esc(name), iso_date(0)));
+        out.push_str(&format!(
+            "<Bucket><Name>{}</Name><CreationDate>{}</CreationDate></Bucket>",
+            esc(name),
+            iso_date(0)
+        ));
     }
     out.push_str("</Buckets></ListAllMyBucketsResult>");
     xml(StatusCode::OK, out)
@@ -418,7 +476,11 @@ fn metadata_from(h: &HeaderMap) -> (Value, Value) {
         }
     }
     if let Some(v) = h.get("content-encoding").and_then(|v| v.to_str().ok()) {
-        let v: Vec<&str> = v.split(',').map(str::trim).filter(|e| *e != "aws-chunked" && !e.is_empty()).collect();
+        let v: Vec<&str> = v
+            .split(',')
+            .map(str::trim)
+            .filter(|e| *e != "aws-chunked" && !e.is_empty())
+            .collect();
         if !v.is_empty() {
             http.insert("contentEncoding".into(), json!(v.join(", ")));
         }
@@ -435,21 +497,34 @@ fn metadata_from(h: &HeaderMap) -> (Value, Value) {
 }
 
 fn is_aws_chunked(h: &HeaderMap) -> bool {
-    h.get("x-amz-content-sha256").and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("STREAMING-"))
-        || h.get("content-encoding").and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("aws-chunked"))
+    h.get("x-amz-content-sha256")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("STREAMING-"))
+        || h.get("content-encoding")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.contains("aws-chunked"))
 }
 
 /// 收內容到暫存檔；簽章帶的是內容的 SHA-256 時要核對
 async fn receive(r2: &R2, req: Request) -> R<(std::path::PathBuf, crate::r2::Received)> {
     let chunked = is_aws_chunked(req.headers());
-    let declared = req.headers().get("x-amz-content-sha256").and_then(|v| v.to_str().ok()).filter(|v| v.len() == 64).map(String::from);
+    let declared = req
+        .headers()
+        .get("x-amz-content-sha256")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| v.len() == 64)
+        .map(String::from);
     let tmp = r2.tmp_path();
     let got = crate::r2::receive(req.into_body(), chunked, &tmp).await?;
     if let Some(d) = declared
         && d != got.sha256
     {
         let _ = std::fs::remove_file(&tmp);
-        return Err(err(StatusCode::BAD_REQUEST, "XAmzContentSHA256Mismatch", "內容和 x-amz-content-sha256 不符"));
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "XAmzContentSHA256Mismatch",
+            "內容和 x-amz-content-sha256 不符",
+        ));
     }
     Ok((tmp, got))
 }
@@ -477,7 +552,9 @@ async fn upload_part(r2: Arc<R2>, bucket: &str, upload_id: &str, n: u32, req: Re
 }
 
 async fn complete_upload(r2: Arc<R2>, bucket: &str, key: &str, upload_id: &str, req: Request) -> R<axum::response::Response> {
-    let body = axum::body::to_bytes(req.into_body(), 1024 * 1024).await.map_err(|e| err(StatusCode::BAD_REQUEST, "MalformedXML", e.to_string()))?;
+    let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "MalformedXML", e.to_string()))?;
     let body = String::from_utf8_lossy(&body);
     let parts: Vec<(u32, String)> = tags(&body, "Part")
         .into_iter()
@@ -505,10 +582,16 @@ async fn complete_upload(r2: Arc<R2>, bucket: &str, key: &str, upload_id: &str, 
 async fn copy_object(s3: &S3, r2: Arc<R2>, bucket: &str, key: &str, h: &HeaderMap) -> R<axum::response::Response> {
     let src = h.get("x-amz-copy-source").and_then(|v| v.to_str().ok()).unwrap_or("");
     let src = decode(src.split('?').next().unwrap_or("").trim_start_matches('/'));
-    let (sb, sk) = src.split_once('/').ok_or_else(|| err(StatusCode::BAD_REQUEST, "InvalidArgument", "x-amz-copy-source 格式不對"))?;
+    let (sb, sk) = src
+        .split_once('/')
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, "InvalidArgument", "x-amz-copy-source 格式不對"))?;
     let src_store = s3.store(sb)?;
     if !Arc::ptr_eq(&src_store, &r2) {
-        return Err(err(StatusCode::NOT_IMPLEMENTED, "NotImplemented", "目前只能在同一個應用的 bucket 之間複製"));
+        return Err(err(
+            StatusCode::NOT_IMPLEMENTED,
+            "NotImplemented",
+            "目前只能在同一個應用的 bucket 之間複製",
+        ));
     }
     let replace = h.get("x-amz-metadata-directive").is_some_and(|v| v == "REPLACE");
     let meta = replace.then(|| metadata_from(h));
@@ -527,10 +610,15 @@ async fn copy_object(s3: &S3, r2: Arc<R2>, bucket: &str, key: &str, h: &HeaderMa
 }
 
 async fn delete_objects(r2: Arc<R2>, bucket: &str, req: Request) -> R<axum::response::Response> {
-    let body = axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024).await.map_err(|e| err(StatusCode::BAD_REQUEST, "MalformedXML", e.to_string()))?;
+    let body = axum::body::to_bytes(req.into_body(), 4 * 1024 * 1024)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, "MalformedXML", e.to_string()))?;
     let body = String::from_utf8_lossy(&body);
     let quiet = tags(&body, "Quiet").first().is_some_and(|v| v.trim() == "true");
-    let keys: Vec<String> = tags(&body, "Object").into_iter().filter_map(|o| tags(o, "Key").first().map(|k| unesc(k))).collect();
+    let keys: Vec<String> = tags(&body, "Object")
+        .into_iter()
+        .filter_map(|o| tags(o, "Key").first().map(|k| unesc(k)))
+        .collect();
     let (b, ks) = (bucket.to_string(), keys.clone());
     run(move || r2.delete(&b, &ks)).await?;
     let mut out = String::from("<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
@@ -545,24 +633,30 @@ async fn delete_objects(r2: Arc<R2>, bucket: &str, req: Request) -> R<axum::resp
 
 async fn get_object(r2: Arc<R2>, bucket: &str, key: &str, head: bool, h: &HeaderMap) -> R<axum::response::Response> {
     let (r, b, k) = (r2.clone(), bucket.to_string(), key.to_string());
-    let meta = run(move || r.head(&b, &k)).await?.ok_or_else(|| err(StatusCode::NOT_FOUND, "NoSuchKey", "物件不存在"))?;
+    let meta = run(move || r.head(&b, &k))
+        .await?
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "NoSuchKey", "物件不存在"))?;
     let size = meta["size"].as_u64().unwrap_or(0);
     let etag = format!("\"{}\"", meta["etag"].as_str().unwrap_or(""));
     if h.get(header::IF_NONE_MATCH).is_some_and(|v| v.as_bytes() == etag.as_bytes()) {
         return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
     }
     // Range: bytes=a-b / bytes=a- / bytes=-n
-    let range = h.get(header::RANGE).and_then(|v| v.to_str().ok()).and_then(|r| r.strip_prefix("bytes=")).and_then(|r| {
-        let (a, b) = r.split_once('-')?;
-        match (a.trim(), b.trim()) {
-            ("", n) => {
-                let n: u64 = n.parse().ok()?;
-                Some((size.saturating_sub(n), size.saturating_sub(1)))
+    let range = h
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|r| r.strip_prefix("bytes="))
+        .and_then(|r| {
+            let (a, b) = r.split_once('-')?;
+            match (a.trim(), b.trim()) {
+                ("", n) => {
+                    let n: u64 = n.parse().ok()?;
+                    Some((size.saturating_sub(n), size.saturating_sub(1)))
+                }
+                (a, "") => Some((a.parse().ok()?, size.saturating_sub(1))),
+                (a, b) => Some((a.parse().ok()?, b.parse::<u64>().ok()?.min(size.saturating_sub(1)))),
             }
-            (a, "") => Some((a.parse().ok()?, size.saturating_sub(1))),
-            (a, b) => Some((a.parse().ok()?, b.parse::<u64>().ok()?.min(size.saturating_sub(1)))),
-        }
-    });
+        });
     if let Some((a, b)) = range
         && (a > b || a >= size)
     {
@@ -573,8 +667,15 @@ async fn get_object(r2: Arc<R2>, bucket: &str, key: &str, head: bool, h: &Header
 
     let http = &meta["httpMetadata"];
     let mut b = Response::builder()
-        .status(if range.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK })
-        .header(header::CONTENT_TYPE, http["contentType"].as_str().unwrap_or("application/octet-stream"))
+        .status(if range.is_some() {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        })
+        .header(
+            header::CONTENT_TYPE,
+            http["contentType"].as_str().unwrap_or("application/octet-stream"),
+        )
         .header(header::CONTENT_LENGTH, length)
         .header(header::ETAG, &etag)
         .header(header::LAST_MODIFIED, http_date(meta["uploaded"].as_i64().unwrap_or(0)))
@@ -602,7 +703,9 @@ async fn get_object(r2: Arc<R2>, bucket: &str, key: &str, head: bool, h: &Header
     if head || length == 0 {
         return Ok(b.body(Body::empty()).map_err(|e| anyhow::anyhow!(e))?);
     }
-    let mut f = tokio::fs::File::open(r2.file_path(bucket, key)).await.map_err(|e| anyhow::anyhow!(e))?;
+    let mut f = tokio::fs::File::open(r2.file_path(bucket, key))
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
     f.seek(std::io::SeekFrom::Start(start)).await.map_err(|e| anyhow::anyhow!(e))?;
     let body = Body::from_stream(tokio_util::io::ReaderStream::new(f.take(length)));
     Ok(b.body(body).map_err(|e| anyhow::anyhow!(e))?)
@@ -626,7 +729,10 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert("host", "examplebucket.s3.amazonaws.com".parse().unwrap());
         h.insert("range", "bytes=0-9".parse().unwrap());
-        h.insert("x-amz-content-sha256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".parse().unwrap());
+        h.insert(
+            "x-amz-content-sha256",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".parse().unwrap(),
+        );
         h.insert("x-amz-date", "20130524T000000Z".parse().unwrap());
         h.insert(
             "authorization",
@@ -653,13 +759,19 @@ mod tests {
         for p in ["us-east-1", "s3", "aws4_request"] {
             key = hmac(&key, p);
         }
-        assert_eq!(hex::encode(hmac(&key, &to_sign)), "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41");
+        assert_eq!(
+            hex::encode(hmac(&key, &to_sign)),
+            "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
+        );
     }
 
     #[test]
     fn xml_tags() {
         let x = "<Delete><Object><Key>a&amp;b</Key></Object><Object><Key>c</Key></Object></Delete>";
-        let keys: Vec<String> = tags(x, "Object").into_iter().filter_map(|o| tags(o, "Key").first().map(|k| unesc(k))).collect();
+        let keys: Vec<String> = tags(x, "Object")
+            .into_iter()
+            .filter_map(|o| tags(o, "Key").first().map(|k| unesc(k)))
+            .collect();
         assert_eq!(keys, vec!["a&b", "c"]);
     }
 }

@@ -49,7 +49,13 @@ impl Assets {
             Some("404-page") => NotFound::Page404,
             _ => NotFound::None,
         };
-        Self { dir, worker_first_all, worker_first, not_found, cache: Mutex::new(HashMap::new()) }
+        Self {
+            dir,
+            worker_first_all,
+            worker_first,
+            not_found,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// 這個路徑要不要先進 Worker（run_worker_first，可用 ! 排除）
@@ -73,7 +79,11 @@ impl Assets {
         let candidates: Vec<PathBuf> = if rel.is_empty() || rel.ends_with('/') {
             vec![base.join("index.html")]
         } else {
-            vec![base.clone(), PathBuf::from(format!("{}.html", base.display())), base.join("index.html")]
+            vec![
+                base.clone(),
+                PathBuf::from(format!("{}.html", base.display())),
+                base.join("index.html"),
+            ]
         };
         candidates.into_iter().find(|p| p.is_file())
     }
@@ -83,8 +93,13 @@ impl Assets {
         match self.not_found {
             NotFound::Spa => {
                 let navigate = headers.get("sec-fetch-mode").is_some_and(|v| v == "navigate")
-                    || headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("text/html"));
-                navigate.then(|| (self.dir.join("index.html"), StatusCode::OK)).filter(|(p, _)| p.is_file())
+                    || headers
+                        .get(header::ACCEPT)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|a| a.contains("text/html"));
+                navigate
+                    .then(|| (self.dir.join("index.html"), StatusCode::OK))
+                    .filter(|(p, _)| p.is_file())
             }
             NotFound::Page404 => {
                 let mut dir = PathBuf::from(url_path.trim_start_matches('/'));
@@ -124,13 +139,27 @@ impl Assets {
         } else {
             mime.to_string()
         };
-        let cached = self.cache.lock().unwrap().get(file).filter(|c| c.mtime == mtime && c.len == len).cloned();
+        let cached = self
+            .cache
+            .lock()
+            .unwrap()
+            .get(file)
+            .filter(|c| c.mtime == mtime && c.len == len)
+            .cloned();
         let (etag, body) = match cached {
             Some(c) => (c.etag, Some(c.data)),
             None if len <= CACHE_MAX_FILE => {
                 let data = Bytes::from(tokio::fs::read(file).await.ok()?);
                 let etag = format!("\"{}\"", &hex::encode(Sha256::digest(&data))[..32]);
-                self.cache.lock().unwrap().insert(file.to_path_buf(), Cached { mtime, len, data: data.clone(), etag: etag.clone() });
+                self.cache.lock().unwrap().insert(
+                    file.to_path_buf(),
+                    Cached {
+                        mtime,
+                        len,
+                        data: data.clone(),
+                        etag: etag.clone(),
+                    },
+                );
                 (etag, Some(data))
             }
             None => {
@@ -196,10 +225,13 @@ mod tests {
         assert!(glob("/api/*", "/api/"));
         assert!(!glob("/api/*", "/apix"));
         assert!(glob("*.json", "/a/b.json"));
-        let a = Assets::new(Path::new("."), &AssetsCfg {
-            run_worker_first: serde_json::json!(["/api/*", "!/api/docs/*"]),
-            ..Default::default()
-        });
+        let a = Assets::new(
+            Path::new("."),
+            &AssetsCfg {
+                run_worker_first: serde_json::json!(["/api/*", "!/api/docs/*"]),
+                ..Default::default()
+            },
+        );
         assert!(a.worker_first("/api/chat"));
         assert!(!a.worker_first("/api/docs/x"));
         assert!(!a.worker_first("/index.html"));
@@ -207,7 +239,13 @@ mod tests {
 
     #[test]
     fn resolve_rejects_traversal() {
-        let a = Assets::new(Path::new(env!("CARGO_MANIFEST_DIR")), &AssetsCfg { directory: Some("src".into()), ..Default::default() });
+        let a = Assets::new(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &AssetsCfg {
+                directory: Some("src".into()),
+                ..Default::default()
+            },
+        );
         assert!(a.resolve("/main.rs").is_some());
         assert!(a.resolve("/main").is_none());
         assert!(a.resolve("/../Cargo.toml").is_none());

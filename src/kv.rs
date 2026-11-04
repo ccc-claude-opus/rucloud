@@ -39,7 +39,11 @@ impl Kv {
         let row = conn
             .prepare_cached("SELECT value, metadata, expiration FROM kv WHERE ns = ? AND key = ?")?
             .query_row(params![ns, key], |r| {
-                Ok(Entry { value: r.get(0)?, metadata: r.get(1)?, expiration: r.get(2)? })
+                Ok(Entry {
+                    value: r.get(0)?,
+                    metadata: r.get(1)?,
+                    expiration: r.get(2)?,
+                })
             })
             .optional()?;
         Ok(row.filter(|e| e.expiration.is_none_or(|t| t > now_secs())))
@@ -54,7 +58,8 @@ impl Kv {
 
     pub fn delete(&self, ns: &str, key: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.prepare_cached("DELETE FROM kv WHERE ns = ? AND key = ?")?.execute(params![ns, key])?;
+        conn.prepare_cached("DELETE FROM kv WHERE ns = ? AND key = ?")?
+            .execute(params![ns, key])?;
         Ok(())
     }
 

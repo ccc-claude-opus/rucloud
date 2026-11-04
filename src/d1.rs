@@ -34,9 +34,7 @@ pub fn open_sqlite(path: &Path) -> Result<Connection> {
         std::fs::create_dir_all(dir)?;
     }
     let conn = Connection::open(path)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;",
-    )?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
     Ok(conn)
 }
 
@@ -86,8 +84,10 @@ impl D1 {
     pub fn migrations(&self, dir: &Path) -> Result<Vec<(String, bool)>> {
         let conn = self.conn.lock().unwrap();
         ensure_migrations_table(&conn)?;
-        let applied: std::collections::HashSet<String> =
-            conn.prepare("SELECT name FROM d1_migrations")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let applied: std::collections::HashSet<String> = conn
+            .prepare("SELECT name FROM d1_migrations")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
         let mut files: Vec<String> = match std::fs::read_dir(dir) {
             Ok(rd) => rd
                 .flatten()
@@ -97,15 +97,23 @@ impl D1 {
             Err(_) => vec![],
         };
         files.sort();
-        Ok(files.into_iter().map(|f| {
-            let done = applied.contains(&f);
-            (f, done)
-        }).collect())
+        Ok(files
+            .into_iter()
+            .map(|f| {
+                let done = applied.contains(&f);
+                (f, done)
+            })
+            .collect())
     }
 
     /// 依序套用還沒套用的 migration，每個檔案一個交易；回傳這次套用的檔名
     pub fn migrate(&self, dir: &Path) -> Result<Vec<String>> {
-        let pending: Vec<String> = self.migrations(dir)?.into_iter().filter(|(_, done)| !done).map(|(n, _)| n).collect();
+        let pending: Vec<String> = self
+            .migrations(dir)?
+            .into_iter()
+            .filter(|(_, done)| !done)
+            .map(|(n, _)| n)
+            .collect();
         let mut conn = self.conn.lock().unwrap();
         for name in &pending {
             let sql = std::fs::read_to_string(dir.join(name))?;
@@ -132,7 +140,10 @@ fn run_one(conn: &Connection, sql: &str, params: &[Value]) -> Result<QueryResult
     let mut stmt = conn.prepare(sql)?;
     let expected = stmt.parameter_count();
     if params.len() != expected {
-        return Err(anyhow!("Wrong number of parameter bindings. SQL statement needs {expected}, got {}", params.len()));
+        return Err(anyhow!(
+            "Wrong number of parameter bindings. SQL statement needs {expected}, got {}",
+            params.len()
+        ));
     }
     for (i, p) in params.iter().enumerate() {
         stmt.raw_bind_parameter(i + 1, to_sql(p)?)?;
@@ -204,13 +215,23 @@ mod tests {
     fn query_batch_exec() {
         let dir = std::env::temp_dir().join(format!("rucloud-d1-{}", std::process::id()));
         let db = D1::open(&dir.join("t.sqlite")).unwrap();
-        db.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, data BLOB); DELETE FROM t;").unwrap();
+        db.exec("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, name TEXT UNIQUE, data BLOB); DELETE FROM t;")
+            .unwrap();
         let r = db.query("INSERT INTO t (name) VALUES (?)", &[json!("a")]).unwrap();
         assert_eq!(r.meta["changes"], 1);
-        assert!(db.batch(&[
-            Stmt { sql: "INSERT INTO t (name) VALUES (?)".into(), params: vec![json!("b")] },
-            Stmt { sql: "INSERT INTO t (name) VALUES (?)".into(), params: vec![json!("a")] },
-        ]).is_err());
+        assert!(
+            db.batch(&[
+                Stmt {
+                    sql: "INSERT INTO t (name) VALUES (?)".into(),
+                    params: vec![json!("b")]
+                },
+                Stmt {
+                    sql: "INSERT INTO t (name) VALUES (?)".into(),
+                    params: vec![json!("a")]
+                },
+            ])
+            .is_err()
+        );
         let r = db.query("SELECT id, name FROM t ORDER BY id", &[]).unwrap();
         assert_eq!(r.columns, vec!["id", "name"]);
         assert_eq!(r.rows.len(), 1, "失敗的 batch 要整批回滾");

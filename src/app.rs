@@ -47,7 +47,10 @@ pub struct Ctx<'a> {
 
 impl App {
     pub fn load(entry: &AppEntry, ctx: &Ctx) -> Result<Arc<App>> {
-        let dir = entry.path.canonicalize().with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
+        let dir = entry
+            .path
+            .canonicalize()
+            .with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
         let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
         let name = entry
             .name
@@ -68,7 +71,9 @@ impl App {
             crate::cli::migrate_all(&dir, &cfg, &d1, &name)?;
         }
         for (binding, file) in &entry.d1_init {
-            let db = d1.get(binding).with_context(|| format!("{name}：d1_init 指定的 {binding} 不是 D1 綁定"))?;
+            let db = d1
+                .get(binding)
+                .with_context(|| format!("{name}：d1_init 指定的 {binding} 不是 D1 綁定"))?;
             let path = if file.is_relative() { dir.join(file) } else { file.clone() };
             let sql = std::fs::read_to_string(&path).with_context(|| format!("讀不到 {}", path.display()))?;
             db.exec(&sql).with_context(|| format!("{name}：執行 {} 失敗", path.display()))?;
@@ -113,7 +118,10 @@ impl App {
             // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
             let runtime_dir = ctx.host_js.parent().unwrap_or(ctx.host_js);
             node_args.push("--permission".to_string());
-            for p in [dir.as_path(), runtime_dir].into_iter().chain(entry.allow_read.iter().map(|p| p.as_path())) {
+            for p in [dir.as_path(), runtime_dir]
+                .into_iter()
+                .chain(entry.allow_read.iter().map(|p| p.as_path()))
+            {
                 node_args.push(format!("--allow-fs-read={}", p.display()));
             }
             for p in std::iter::once(state.join("do-sqlite")).chain(entry.allow_write.iter().cloned()) {
@@ -146,7 +154,11 @@ impl App {
         });
 
         Ok(Arc::new(App {
-            r2_buckets: cfg.r2_buckets.iter().map(|r| (r.binding.clone(), r.bucket_name.clone().unwrap_or(r.binding.clone()))).collect(),
+            r2_buckets: cfg
+                .r2_buckets
+                .iter()
+                .map(|r| (r.binding.clone(), r.bucket_name.clone().unwrap_or(r.binding.clone())))
+                .collect(),
             ratelimits: cfg.ratelimits.iter().map(|r| (r.name.clone(), r.simple.clone())).collect(),
             kv: Arc::new(Kv::open(&state.join("kv.sqlite"))?),
             durable: Arc::new(DoStore::open(&state.join("durable.sqlite"))?),

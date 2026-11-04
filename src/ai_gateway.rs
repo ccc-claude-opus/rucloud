@@ -71,7 +71,12 @@ impl Gateway {
                key TEXT PRIMARY KEY, status INTEGER, content_type TEXT, body BLOB, expires INTEGER);",
         )?;
         let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build()?;
-        Ok(Arc::new(Self { cfg, db: Mutex::new(db), http, windows: Mutex::new(HashMap::new()) }))
+        Ok(Arc::new(Self {
+            cfg,
+            db: Mutex::new(db),
+            http,
+            windows: Mutex::new(HashMap::new()),
+        }))
     }
 
     fn upstream(&self, provider: &str) -> Option<String> {
@@ -156,14 +161,25 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
-    let model = serde_json::from_slice::<Value>(&body).ok().and_then(|v| v["model"].as_str().map(String::from)).unwrap_or_default();
+    let model = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|v| v["model"].as_str().map(String::from))
+        .unwrap_or_default();
     let h = &parts.headers;
     let hv = |k: &str| h.get(k).and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     let ttl = hv("cf-aig-cache-ttl").parse::<u64>().unwrap_or(gw.cfg.cache_ttl);
     let use_cache = ttl > 0 && hv("cf-aig-skip-cache") != "true";
     // 金鑰也算進快取鍵：不同使用者不會拿到別人的快取
     let key = hex::encode(Sha256::digest(
-        [provider.as_bytes(), rest.as_bytes(), query.as_bytes(), hv("authorization").as_bytes(), hv("x-api-key").as_bytes(), &body].concat(),
+        [
+            provider.as_bytes(),
+            rest.as_bytes(),
+            query.as_bytes(),
+            hv("authorization").as_bytes(),
+            hv("x-api-key").as_bytes(),
+            &body,
+        ]
+        .concat(),
     ));
 
     if use_cache {
@@ -179,7 +195,17 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
             .flatten()
         };
         if let Some((status, ctype, data)) = hit {
-            gw.log(&gateway, &provider, rest, &model, status, start.elapsed().as_secs_f64() * 1000.0, true, body.len(), data.len());
+            gw.log(
+                &gateway,
+                &provider,
+                rest,
+                &model,
+                status,
+                start.elapsed().as_secs_f64() * 1000.0,
+                true,
+                body.len(),
+                data.len(),
+            );
             return Response::builder()
                 .status(status)
                 .header("content-type", ctype)
@@ -192,13 +218,23 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
     let mut fwd = HeaderMap::new();
     for (k, v) in h {
         let n = k.as_str();
-        if !matches!(n, "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding") && !n.starts_with("cf-aig-") {
+        if !matches!(
+            n,
+            "host" | "content-length" | "connection" | "transfer-encoding" | "accept-encoding"
+        ) && !n.starts_with("cf-aig-")
+        {
             fwd.append(k.clone(), v.clone());
         }
     }
     let mut attempt = 0;
     let resp = loop {
-        let r = gw.http.request(parts.method.clone(), &url).headers(fwd.clone()).body(body.clone()).send().await;
+        let r = gw
+            .http
+            .request(parts.method.clone(), &url)
+            .headers(fwd.clone())
+            .body(body.clone())
+            .send()
+            .await;
         let retryable = match &r {
             Ok(r) => r.status() == 429 || r.status().is_server_error(),
             Err(_) => true,
@@ -212,15 +248,33 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
     let resp = match resp {
         Ok(r) => r,
         Err(e) => {
-            gw.log(&gateway, &provider, rest, &model, 502, start.elapsed().as_secs_f64() * 1000.0, false, body.len(), 0);
+            gw.log(
+                &gateway,
+                &provider,
+                rest,
+                &model,
+                502,
+                start.elapsed().as_secs_f64() * 1000.0,
+                false,
+                body.len(),
+                0,
+            );
             return (StatusCode::BAD_GATEWAY, format!("AI Gateway：連不到上游：{e}\n")).into_response();
         }
     };
     let status = resp.status();
-    let ctype = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    let ctype = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
     let mut out = Response::builder().status(status).header("cf-aig-cache-status", "MISS");
     for (k, v) in resp.headers() {
-        if !matches!(k.as_str(), "connection" | "transfer-encoding" | "content-length" | "content-encoding") {
+        if !matches!(
+            k.as_str(),
+            "connection" | "transfer-encoding" | "content-length" | "content-encoding"
+        ) {
             out = out.header(k, v);
         }
     }
@@ -258,7 +312,17 @@ async fn proxy(State(gw): State<Arc<Gateway>>, req: Request) -> Response<Body> {
                 params![key, status.as_u16(), ctype, buf, crate::kv::now_secs() + ttl as i64],
             );
         }
-        gw.log(&gateway, &provider, rest_owned(&path), &model, status.as_u16(), start.elapsed().as_secs_f64() * 1000.0, false, req_len, total);
+        gw.log(
+            &gateway,
+            &provider,
+            rest_owned(&path),
+            &model,
+            status.as_u16(),
+            start.elapsed().as_secs_f64() * 1000.0,
+            false,
+            req_len,
+            total,
+        );
     });
     let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|c| (c, rx)) });
     out.body(Body::from_stream(stream)).unwrap()

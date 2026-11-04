@@ -32,7 +32,10 @@ impl Queues {
                attempts INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL, visible_at INTEGER NOT NULL);
              CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue, visible_at);",
         )?;
-        Ok(Self { conn: Mutex::new(conn), notify: Notify::new() })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            notify: Notify::new(),
+        })
     }
 
     /// messages: [{body, contentType, delaySeconds}]
@@ -99,7 +102,9 @@ impl Queues {
                 conn.execute("DELETE FROM messages WHERE id = ?", [id])?;
             }
             Some(delay) => {
-                let attempts: i64 = conn.query_row("SELECT attempts FROM messages WHERE id = ?", [id], |r| r.get(0)).unwrap_or(0);
+                let attempts: i64 = conn
+                    .query_row("SELECT attempts FROM messages WHERE id = ?", [id], |r| r.get(0))
+                    .unwrap_or(0);
                 if attempts > cfg.max_retries.unwrap_or(3) as i64 {
                     match &cfg.dead_letter_queue {
                         Some(dlq) => conn.execute(
@@ -108,10 +113,19 @@ impl Queues {
                         )?,
                         None => conn.execute("DELETE FROM messages WHERE id = ?", [id])?,
                     };
-                    tracing::warn!("佇列 {} 的訊息 {id} 重試 {attempts} 次仍失敗，{}", cfg.queue,
-                        cfg.dead_letter_queue.as_ref().map(|d| format!("移到 {d}")).unwrap_or_else(|| "丟棄".into()));
+                    tracing::warn!(
+                        "佇列 {} 的訊息 {id} 重試 {attempts} 次仍失敗，{}",
+                        cfg.queue,
+                        cfg.dead_letter_queue
+                            .as_ref()
+                            .map(|d| format!("移到 {d}"))
+                            .unwrap_or_else(|| "丟棄".into())
+                    );
                 } else {
-                    conn.execute("UPDATE messages SET visible_at = ? WHERE id = ?", params![now_ms() + delay * 1000, id])?;
+                    conn.execute(
+                        "UPDATE messages SET visible_at = ? WHERE id = ?",
+                        params![now_ms() + delay * 1000, id],
+                    )?;
                 }
             }
         }

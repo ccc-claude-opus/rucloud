@@ -12,7 +12,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 const HOP_BY_HOP: [&str; 8] = [
-    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade",
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
 ];
 
 pub async fn app_handler(State(app): State<Arc<App>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response<Body> {
@@ -26,7 +33,11 @@ pub async fn edge_handler(
     req: Request,
 ) -> Response<Body> {
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
-    let host = host.rsplit_once(':').filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(host);
+    let host = host
+        .rsplit_once(':')
+        .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+        .map(|(h, _)| h)
+        .unwrap_or(host);
     let app = routes.get(host).or_else(|| routes.get(host.split('.').next().unwrap_or("")));
     match app {
         Some(app) => handle(app, req, peer).await,
@@ -39,7 +50,14 @@ pub async fn handle(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let resp = route(app, req, peer).await;
-    tracing::info!("[{}] {} {} {} {:.1}ms", app.name, method, path, resp.status().as_u16(), start.elapsed().as_secs_f64() * 1000.0);
+    tracing::info!(
+        "[{}] {} {} {} {:.1}ms",
+        app.name,
+        method,
+        path,
+        resp.status().as_u16(),
+        start.elapsed().as_secs_f64() * 1000.0
+    );
     resp
 }
 
@@ -51,7 +69,11 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
     // 開發模式：手動觸發排程，和 wrangler dev --test-scheduled 一樣
     if app.dev && path == "/__scheduled" {
         let cron = req.uri().query().and_then(|q| {
-            q.split('&').find_map(|kv| kv.strip_prefix("cron=")).map(|c| urlencoding::decode(&c.replace('+', " ")).map(|s| s.into_owned()).unwrap_or_default())
+            q.split('&').find_map(|kv| kv.strip_prefix("cron=")).map(|c| {
+                urlencoding::decode(&c.replace('+', " "))
+                    .map(|s| s.into_owned())
+                    .unwrap_or_default()
+            })
         });
         let body = serde_json::json!({ "cron": cron.unwrap_or_default(), "scheduledTime": chrono::Utc::now().timestamp_millis() });
         return match invoke(app, "scheduled", &body).await {
@@ -68,7 +90,11 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
             return r;
         }
         // 沒有 Worker，或是 SPA 的導覽請求：交給 not_found_handling
-        if app.pool.is_none() || assets.not_found_file(&path, req.headers()).is_some_and(|(_, s)| s == StatusCode::OK) {
+        if app.pool.is_none()
+            || assets
+                .not_found_file(&path, req.headers())
+                .is_some_and(|(_, s)| s == StatusCode::OK)
+        {
             return match assets.serve(req.method(), &path, req.headers()).await {
                 Some(r) => r,
                 None => StatusCode::NOT_FOUND.into_response(),
@@ -78,8 +104,18 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
     if app.pool.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let scheme = req.headers().get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("http").to_string();
-    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost").to_string();
+    let scheme = req
+        .headers()
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http")
+        .to_string();
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost")
+        .to_string();
     let url = format!("{scheme}://{host}{}", req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
     let mut extra = vec![
         ("x-rucloud-url", url),
@@ -112,7 +148,11 @@ pub async fn forward(app: &App, affinity: Option<usize>, req: Request, extra: &[
             headers.insert(n, v);
         }
     }
-    let pq = req.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".into());
+    let pq = req
+        .uri()
+        .path_and_query()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| "/".into());
     if crate::ws::is_upgrade(req.headers()) {
         return crate::ws::tunnel(req, port, &pq, &headers).await;
     }

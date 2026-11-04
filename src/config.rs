@@ -155,8 +155,16 @@ pub struct ServiceCfg {
 
 /// 這些設定不會從最上層繼承到 env.<名稱>（和 wrangler 一樣），環境裡沒寫就是沒有
 const NON_INHERITABLE: &[&str] = &[
-    "vars", "d1_databases", "kv_namespaces", "r2_buckets", "durable_objects", "queues", "services",
-    "vectorize", "ai", "ratelimits",
+    "vars",
+    "d1_databases",
+    "kv_namespaces",
+    "r2_buckets",
+    "durable_objects",
+    "queues",
+    "services",
+    "vectorize",
+    "ai",
+    "ratelimits",
 ];
 
 /// 找應用資料夾裡的 wrangler 設定檔並解析（wrangler.jsonc / wrangler.json / wrangler.toml）。
