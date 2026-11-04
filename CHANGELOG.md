@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 1.1.0 — 管理介面
+
+* 管理埠的 `/` 是一個網頁（單一檔案、不連外部 CDN，亮色 / 暗色、手機都能用）：
+  * 應用總覽：Worker 程序狀態、請求數與 5xx、平均延遲、處理中的請求、WebSocket、程序重開次數、快取命中率，每 3 秒更新。
+  * 單一應用：即時 log（依種類與文字篩選）、版本列表與切換 / rollback / reload、上傳 `.tar.gz` 部署、綁定與呼叫次數、清除閘道快取。
+  * Analytics Engine 的 SQL 查詢、佇列訊息數。
+  * 有設定 `[admin] token` 時，網頁會要求輸入（只存在該分頁）。
+* 管理 API 新增 `GET /stats`（各應用的狀態與計數，JSON）、`GET /queues`（各佇列訊息數），需要 token。
+
 ## 1.0.0 — 穩定版
 
 從這版開始遵守語意化版本，承諾範圍見 [doc/stability.md](doc/stability.md)。

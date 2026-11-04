@@ -39,6 +39,29 @@ impl Metrics {
         *self.bindings.lock().unwrap().entry(kind.to_string()).or_default() += 1;
     }
 
+    /// 給管理介面用的 JSON
+    pub fn snapshot(&self) -> Value {
+        let mut req = serde_json::Map::new();
+        for ((route, class), n) in self.requests.lock().unwrap().iter() {
+            let r = req.entry(route.to_string()).or_insert_with(|| json!({}));
+            r[format!("{class}xx")] = json!(n);
+        }
+        let count = self.duration_count.load(Ordering::Relaxed);
+        let avg_ms = if count == 0 {
+            0.0
+        } else {
+            self.duration_sum_us.load(Ordering::Relaxed) as f64 / count as f64 / 1000.0
+        };
+        json!({
+            "requests": req,
+            "count": count,
+            "avg_ms": (avg_ms * 10.0).round() / 10.0,
+            "inflight": self.inflight.load(Ordering::Relaxed),
+            "websockets": self.websockets.load(Ordering::Relaxed),
+            "bindings": self.bindings.lock().unwrap().clone(),
+        })
+    }
+
     /// 把這個應用的數字寫成 Prometheus 文字格式
     pub fn render(&self, app: &str, restarts: u64, out: &mut String) {
         let a = app.replace('"', "");

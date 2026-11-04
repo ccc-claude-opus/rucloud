@@ -83,6 +83,7 @@ flowchart LR
 | `rucloud d1 migrations create \| list \| apply <應用資料夾> <資料庫>` | D1 migrations（同 wrangler 的格式） |
 | `rucloud kv put \| get \| list \| delete <應用資料夾> … --binding KV` | 本機 KV |
 | `rucloud r2 object put \| get \| list \| delete <應用資料夾> <bucket>/<key>` | 本機 R2 |
+| 管理埠首頁 <http://127.0.0.1:8799/> | 網頁管理介面：狀態、log、版本、快取、Analytics |
 | `rucloud tail <應用> [--admin http://127.0.0.1:8799] [--kind error]` | 即時看 log |
 | `rucloud deploy [資料夾] [-m 說明]`、`versions`、`rollback [--to 版本]`、`reload` | 部署新版本、版本管理（不停機） |
 | `rucloud purge <應用> [--prefix 主機/路徑]` | 清閘道快取 |

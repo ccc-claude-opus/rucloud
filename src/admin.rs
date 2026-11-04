@@ -1,4 +1,7 @@
 //! 管理埠（預設只聽 127.0.0.1）：
+//!   GET /                       管理介面（網頁）
+//!   GET /stats                  各應用的狀態與計數（JSON，管理介面用）
+//!   GET /queues                 各佇列的訊息數
 //!   GET /health                 健康檢查（關閉中回 503）
 //!   GET /metrics                Prometheus 格式的計數
 //!   GET /apps                   應用列表
@@ -50,6 +53,8 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/apps/{app}/rollback", post(rollback))
         .route("/apps/{app}/reload", post(reload))
         .route("/apps/{app}/cache/purge", post(purge))
+        .route("/stats", get(stats))
+        .route("/queues", get(queues))
         .route("/analytics/sql", post(analytics_sql))
         .route("/queues/{queue}/messages", post(queue_send))
         .route("/queues/{queue}/messages/pull", post(queue_pull))
@@ -57,6 +62,7 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(crate::deploy::MAX_UPLOAD))
         .layer(middleware::from_fn_with_state(admin.clone(), auth));
     Router::new()
+        .route("/", get(dashboard))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .merge(protected)
@@ -325,4 +331,75 @@ async fn queue_ack(State(admin): S, Path(_queue): Path<String>, axum::Json(b): a
         Ok(Err(e)) => fail(e),
         Err(e) => fail(anyhow::anyhow!(e)),
     }
+}
+
+// ---------- 管理介面 ----------
+
+const DASHBOARD: &str = include_str!("dashboard.html");
+
+async fn dashboard() -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        DASHBOARD,
+    )
+        .into_response()
+}
+
+async fn stats(State(admin): S) -> Response {
+    let apps: Vec<serde_json::Value> = admin
+        .apps
+        .iter()
+        .map(|(name, slot)| {
+            let a = slot.get();
+            let c = &slot.shared.cache;
+            let mut m = slot.shared.metrics.snapshot();
+            m["name"] = json!(name);
+            m["dir"] = json!(a.dir);
+            m["version"] = json!(crate::deploy::manifest(&admin.deployer.ctx, name).current);
+            m["workers"] = json!(
+                a.pool
+                    .as_ref()
+                    .map(|p| json!({ "ready": p.ready_count(), "total": p.len(), "restarts": p.restarts() }))
+            );
+            m["cache"] = json!({
+                "enabled": c.edge.is_some(),
+                "hits": c.hits.load(Ordering::Relaxed),
+                "misses": c.misses.load(Ordering::Relaxed),
+                "bytes": c.edge.as_ref().map(|e| e.stats().1).unwrap_or(0),
+                "api_bytes": c.api.stats().1,
+            });
+            m["bindings_config"] = json!({
+                "d1": a.cfg.d1_databases.iter().map(|d| &d.binding).collect::<Vec<_>>(),
+                "kv": a.cfg.kv_namespaces.iter().map(|k| &k.binding).collect::<Vec<_>>(),
+                "r2": a.cfg.r2_buckets.iter().map(|r| &r.binding).collect::<Vec<_>>(),
+                "durable_objects": a.cfg.durable_objects.bindings.iter().map(|d| &d.name).collect::<Vec<_>>(),
+                "queues": a.cfg.queues.producers.iter().map(|q| &q.queue).collect::<Vec<_>>(),
+                "workflows": a.cfg.workflows.iter().map(|w| &w.name).collect::<Vec<_>>(),
+                "crons": a.cfg.triggers.crons,
+            });
+            m
+        })
+        .collect();
+    axum::Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "draining": admin.draining.load(Ordering::Relaxed),
+        "token_required": admin.token.is_some(),
+        "apps": apps,
+    }))
+    .into_response()
+}
+
+async fn queues(State(admin): S) -> Response {
+    let q = admin.queues.clone();
+    let depth = tokio::task::spawn_blocking(move || q.depth()).await.unwrap_or_default();
+    axum::Json(json!(
+        depth
+            .into_iter()
+            .map(|(q, n)| json!({ "queue": q, "messages": n }))
+            .collect::<Vec<_>>()
+    ))
+    .into_response()
 }

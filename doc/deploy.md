@@ -94,6 +94,8 @@ HTTPS 可以由 rucloud 自己處理（`[tls]`，ACME 需要 443 埠對外），
 
 ### 監控
 
+管理埠的首頁（例如 <http://127.0.0.1:8799/>）就是管理介面：應用狀態、即時 log、版本與 rollback、快取、Analytics 查詢。
+
 ```bash
 curl localhost:8799/health                 # 關閉中回 503
 curl localhost:8799/metrics                # 給 Prometheus 抓

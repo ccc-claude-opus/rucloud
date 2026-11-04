@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rucloud 管理</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #6a7282; --line: #e3e6eb;
+    --accent: #2f6fde; --ok: #1f9d55; --warn: #c27c0e; --bad: #d33a3a; --code: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171c; --panel: #1c2027; --text: #e6e9ee; --muted: #9aa3b2; --line: #2c323c;
+            --accent: #6c9cff; --ok: #44c27d; --warn: #e3a33a; --bad: #ff6b6b; --code: #23282f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Noto Sans TC", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+  header h1 { font-size: 16px; margin: 0; }
+  .grow { flex: 1; }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px 20px 40px; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; background: var(--code); color: var(--muted); }
+  .badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  .badge.bad { background: color-mix(in srgb, var(--bad) 18%, transparent); color: var(--bad); }
+  .badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+  nav.top { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+  nav.top button, .tabs button { border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+  nav.top button.on, .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .card.app { cursor: pointer; }
+  .card.app:hover { border-color: var(--accent); }
+  .card h3 { margin: 0 0 6px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .tabs { display: flex; gap: 4px; margin: 12px 0; flex-wrap: wrap; }
+  pre.log { background: var(--code); border-radius: 8px; padding: 10px; height: 55vh; overflow: auto; margin: 0; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .log .error { color: var(--bad); } .log .request { color: var(--muted); } .log .system { color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  input, textarea, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  textarea { width: 100%; min-height: 90px; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .act { display: inline-block; border: 1px solid var(--accent); background: var(--accent); color: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; font: inherit; }
+  .act.ghost { background: transparent; color: var(--accent); }
+  .act:disabled { opacity: .5; cursor: default; }
+  .msg { min-height: 1.5em; font-size: 13px; }
+  .msg.err { color: var(--bad); } .msg.ok { color: var(--ok); }
+  .tags span { display: inline-block; margin: 2px 4px 2px 0; padding: 0 6px; border-radius: 4px; background: var(--code); font-size: 12px; }
+  #login { max-width: 360px; margin: 15vh auto; }
+  .hidden { display: none !important; }
+  @media (max-width: 600px) { main { padding: 12px; } header { padding: 10px 12px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>rucloud</h1>
+  <span id="ver" class="badge"></span>
+  <span id="state" class="badge"></span>
+  <span class="grow"></span>
+  <span id="updated" class="muted"></span>
+</header>
+
+<main>
+  <div id="login" class="card hidden">
+    <h3>需要管理 token</h3>
+    <p class="muted">rucloud.toml 的 <code>[admin] token</code>。只存在這個分頁裡。</p>
+    <div class="row"><input id="token" type="password" style="flex:1" placeholder="token"><button class="act" id="login-btn">登入</button></div>
+    <div id="login-msg" class="msg err"></div>
+  </div>
+
+  <div id="app-ui" class="hidden">
+    <nav class="top" id="top">
+      <button data-view="apps" class="on">應用</button>
+      <button data-view="analytics">Analytics</button>
+      <button data-view="queues">佇列</button>
+    </nav>
+
+    <section id="view-apps">
+      <div id="cards" class="grid"></div>
+      <div id="detail" class="card hidden" style="margin-top:16px">
+        <h3><span id="d-name"></span><span id="d-version" class="badge"></span></h3>
+        <div class="muted" id="d-dir"></div>
+        <div class="tabs" id="d-tabs">
+          <button data-tab="logs" class="on">Log</button>
+          <button data-tab="versions">版本</button>
+          <button data-tab="bindings">綁定</button>
+          <button data-tab="cache">快取</button>
+        </div>
+        <div id="tab-logs">
+          <div class="row">
+            <label><input type="checkbox" data-kind="console" checked> console</label>
+            <label><input type="checkbox" data-kind="error" checked> error</label>
+            <label><input type="checkbox" data-kind="request" checked> request</label>
+            <label><input type="checkbox" data-kind="system" checked> system</label>
+            <input id="log-filter" placeholder="篩選文字" style="flex:1;min-width:120px">
+            <button class="act ghost" id="log-clear">清畫面</button>
+          </div>
+          <pre class="log" id="log"></pre>
+        </div>
+        <div id="tab-versions" class="hidden">
+          <div class="row">
+            <button class="act" id="v-rollback">回到上一版</button>
+            <button class="act ghost" id="v-reload">重新載入</button>
+            <span class="grow"></span>
+            <label class="act ghost" style="cursor:pointer">上傳新版本（.tar.gz）<input id="v-file" type="file" accept=".gz,.tgz,application/gzip" class="hidden"></label>
+            <input id="v-msg" placeholder="版本說明">
+          </div>
+          <div id="v-status" class="msg"></div>
+          <table><thead><tr><th></th><th>版本</th><th>時間</th><th>檔案</th><th>說明</th><th></th></tr></thead><tbody id="v-rows"></tbody></table>
+          <p class="muted">也可以用指令部署：<code>rucloud deploy ./資料夾 --admin <span class="origin"></span></code></p>
+        </div>
+        <div id="tab-bindings" class="hidden"><div id="b-list"></div></div>
+        <div id="tab-cache" class="hidden">
+          <p id="c-info" class="muted"></p>
+          <div class="row"><input id="c-prefix" placeholder="主機/路徑 的開頭，例如 localhost:8787/blog/（空白 = 全部）" style="flex:1"><button class="act" id="c-purge">清除閘道快取</button></div>
+          <div id="c-status" class="msg"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-analytics" class="hidden card">
+      <h3>Analytics Engine</h3>
+      <p class="muted">SQLite 的 SQL，每個 dataset 是一個 view；欄位 timestamp、index1、blob1…blob20、double1…double20。</p>
+      <textarea id="sql">SELECT blob1, COUNT(*) AS n FROM page_views WHERE timestamp > datetime('now', '-1 day') GROUP BY blob1 ORDER BY n DESC LIMIT 20</textarea>
+      <div class="row"><button class="act" id="sql-run">查詢</button><span id="sql-status" class="msg"></span></div>
+      <div style="overflow:auto"><table id="sql-table"></table></div>
+    </section>
+
+    <section id="view-queues" class="hidden card">
+      <h3>佇列</h3>
+      <table><thead><tr><th>佇列</th><th>訊息數（含延遲、處理中）</th></tr></thead><tbody id="q-rows"></tbody></table>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  let token = sessionStorage.getItem('rucloud-token') || '';
+  let current = null;      // 選到的應用
+  let source = null;       // log 的 EventSource
+  let stats = null;
+
+  document.querySelectorAll('.origin').forEach((e) => { e.textContent = location.origin; });
+
+  async function api(path, opts = {}) {
+    const headers = { ...(opts.headers || {}) };
+    if (token) headers.authorization = `Bearer ${token}`;
+    const r = await fetch(path, { ...opts, headers });
+    if (r.status === 401) { showLogin('token 不對或已失效'); throw new Error('unauthorized'); }
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch { data = text; }
+    if (!r.ok) throw new Error(data?.error || text || r.statusText);
+    return data;
+  }
+
+  function showLogin(msg) {
+    $('#login').classList.remove('hidden');
+    $('#app-ui').classList.add('hidden');
+    $('#login-msg').textContent = msg || '';
+  }
+  $('#login-btn').onclick = async () => {
+    token = $('#token').value.trim();
+    sessionStorage.setItem('rucloud-token', token);
+    $('#login').classList.add('hidden');
+    await refresh();
+  };
+  $('#token').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#login-btn').click(); });
+
+  // ---------- 概況 ----------
+  const sum = (o) => Object.values(o || {}).reduce((a, b) => a + b, 0);
+  function cls(r) { return (r?.['5xx'] || 0) > 0 ? 'bad' : 'ok'; }
+
+  async function refresh() {
+    try { stats = await api('/stats'); } catch (e) { if (e.message !== 'unauthorized') $('#state').textContent = '連不上'; return; }
+    $('#app-ui').classList.remove('hidden');
+    $('#ver').textContent = `v${stats.version}`;
+    $('#state').textContent = stats.draining ? '關閉中' : '運作中';
+    $('#state').className = `badge ${stats.draining ? 'warn' : 'ok'}`;
+    $('#updated').textContent = `更新於 ${new Date().toLocaleTimeString()}`;
+    $('#cards').innerHTML = stats.apps.map((a) => {
+      const w = a.workers;
+      const worker = a.requests.worker || {};
+      const asset = a.requests.asset || {};
+      const hitRate = a.cache.enabled && (a.cache.hits + a.cache.misses) ? `${Math.round(100 * a.cache.hits / (a.cache.hits + a.cache.misses))}%` : '—';
+      const wBadge = !w ? '<span class="badge">只有靜態檔案</span>'
+        : `<span class="badge ${w.ready === w.total ? 'ok' : 'warn'}">${w.ready}/${w.total} 程序</span>`;
+      return `<div class="card app" data-app="${esc(a.name)}">
+        <h3>${esc(a.name)} ${wBadge}</h3>
+        <dl class="kv">
+          <dt>版本</dt><dd>${esc(a.version || '設定檔的 path')}</dd>
+          <dt>Worker 請求</dt><dd><span class="badge ${cls(worker)}">${sum(worker)}</span> 5xx ${worker['5xx'] || 0}</dd>
+          <dt>靜態檔案</dt><dd>${sum(asset)}</dd>
+          <dt>平均延遲</dt><dd>${a.avg_ms} ms</dd>
+          <dt>處理中 / WebSocket</dt><dd>${a.inflight} / ${a.websockets}</dd>
+          <dt>程序重開</dt><dd>${w ? w.restarts : '—'}</dd>
+          <dt>快取命中</dt><dd>${hitRate}</dd>
+        </dl></div>`;
+    }).join('') || '<p class="muted">沒有應用</p>';
+    document.querySelectorAll('.card.app').forEach((c) => { c.onclick = () => select(c.dataset.app); });
+    if (current) renderDetail();
+  }
+
+  function app() { return stats?.apps.find((a) => a.name === current); }
+
+  // ---------- 單一應用 ----------
+  function select(name) {
+    if (current === name) return;
+    current = name;
+    $('#detail').classList.remove('hidden');
+    $('#log').textContent = '';
+    renderDetail();
+    startLog();
+    loadVersions();
+    $('#detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderDetail() {
+    const a = app();
+    if (!a) return;
+    $('#d-name').textContent = a.name;
+    $('#d-version').textContent = a.version || '設定檔的 path';
+    $('#d-dir').textContent = a.dir;
+    const b = a.bindings_config;
+    const rows = [
+      ['D1', b.d1], ['KV', b.kv], ['R2', b.r2], ['Durable Objects', b.durable_objects],
+      ['Queues（producer）', b.queues], ['Workflows', b.workflows], ['Cron', b.crons],
+    ].filter(([, v]) => v && v.length);
+    const calls = Object.entries(a.bindings || {}).map(([k, v]) => `<span>${esc(k)} ${v}</span>`).join('');
+    $('#b-list').innerHTML = `<table><tbody>${rows.map(([k, v]) => `<tr><th>${k}</th><td class="tags">${v.map((x) => `<span>${esc(x)}</span>`).join('')}</td></tr>`).join('')
+      || '<tr><td class="muted">沒有綁定</td></tr>'}</tbody></table><p class="muted">綁定呼叫次數：</p><div class="tags">${calls || '<span>—</span>'}</div>`;
+    $('#c-info').textContent = a.cache.enabled
+      ? `閘道快取 ${(a.cache.bytes / 1024).toFixed(1)} KB，命中 ${a.cache.hits}、沒命中 ${a.cache.misses}；Cache API ${(a.cache.api_bytes / 1024).toFixed(1)} KB`
+      : `這個應用沒有開閘道快取（rucloud.toml 的 cache_mb）；Cache API ${(a.cache.api_bytes / 1024).toFixed(1)} KB`;
+  }
+
+  document.querySelectorAll('#d-tabs button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('#d-tabs button').forEach((x) => x.classList.toggle('on', x === b));
+      for (const t of ['logs', 'versions', 'bindings', 'cache']) $(`#tab-${t}`).classList.toggle('hidden', t !== b.dataset.tab);
+      if (b.dataset.tab === 'versions') loadVersions();
+    };
+  });
+
+  // ---------- log ----------
+  const kinds = () => new Set([...document.querySelectorAll('[data-kind]')].filter((c) => c.checked).map((c) => c.dataset.kind));
+  function startLog() {
+    source?.close();
+    const q = new URLSearchParams({ n: '200' });
+    if (token) q.set('token', token);
+    source = new EventSource(`/apps/${encodeURIComponent(current)}/tail?${q}`);
+    source.onmessage = (e) => appendLog(JSON.parse(e.data));
+  }
+  function appendLog(l) {
+    const pre = $('#log');
+    const line = document.createElement('div');
+    line.className = l.kind;
+    line.dataset.kind = l.kind;
+    line.textContent = `${l.ts.slice(11, 23)} [${l.kind}] ${l.message}`;
+    applyFilter(line);
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.appendChild(line);
+    while (pre.childNodes.length > 2000) pre.firstChild.remove();
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  }
+  function applyFilter(line) {
+    const f = $('#log-filter').value.toLowerCase();
+    line.classList.toggle('hidden', !kinds().has(line.dataset.kind) || (f && !line.textContent.toLowerCase().includes(f)));
+  }
+  const refilter = () => document.querySelectorAll('#log > div').forEach(applyFilter);
+  document.querySelectorAll('[data-kind]').forEach((c) => { c.onchange = refilter; });
+  $('#log-filter').oninput = refilter;
+  $('#log-clear').onclick = () => { $('#log').textContent = ''; };
+
+  // ---------- 版本 ----------
+  function status(el, msg, ok) { el.textContent = msg; el.className = `msg ${ok ? 'ok' : 'err'}`; }
+  async function loadVersions() {
+    if (!current) return;
+    const v = await api(`/apps/${encodeURIComponent(current)}/versions`);
+    const rows = [...v.versions].reverse().map((x) => `<tr>
+      <td>${x.id === v.current ? '<span class="badge ok">目前</span>' : ''}</td>
+      <td><code>${esc(x.id)}</code></td><td>${esc(new Date(x.created).toLocaleString())}</td>
+      <td>${x.files}</td><td>${esc(x.message)}</td>
+      <td>${x.id === v.current ? '' : `<button class="act ghost" data-activate="${esc(x.id)}">切換</button>`}</td></tr>`);
+    rows.push(`<tr><td>${v.current ? '' : '<span class="badge ok">目前</span>'}</td><td colspan="4" class="muted">rucloud.toml 的 path</td>
+      <td>${v.current ? '<button class="act ghost" data-activate="path">切換</button>' : ''}</td></tr>`);
+    $('#v-rows').innerHTML = rows.join('');
+    document.querySelectorAll('[data-activate]').forEach((b) => {
+      b.onclick = () => run(`/apps/${encodeURIComponent(current)}/versions/${encodeURIComponent(b.dataset.activate)}/activate`, `已切換到 ${b.dataset.activate}`);
+    });
+  }
+  async function run(path, okMsg, body) {
+    const el = $('#v-status');
+    status(el, '處理中…（新版本的 Worker 起好才會換上）', true);
+    document.querySelectorAll('#tab-versions button').forEach((b) => { b.disabled = true; });
+    try {
+      await api(path, { method: 'POST', body, headers: body ? { 'content-type': 'application/gzip' } : {} });
+      status(el, okMsg, true);
+    } catch (e) {
+      status(el, e.message, false);
+    } finally {
+      document.querySelectorAll('#tab-versions button').forEach((b) => { b.disabled = false; });
+      loadVersions();
+      refresh();
+    }
+  }
+  $('#v-rollback').onclick = () => run(`/apps/${encodeURIComponent(current)}/rollback`, '已回到上一版');
+  $('#v-reload').onclick = () => run(`/apps/${encodeURIComponent(current)}/reload`, '已重新載入');
+  $('#v-file').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const msg = encodeURIComponent($('#v-msg').value || f.name);
+    await run(`/apps/${encodeURIComponent(current)}/versions?message=${msg}`, `已部署 ${f.name}`, await f.arrayBuffer());
+    e.target.value = '';
+  };
+
+  // ---------- 快取 ----------
+  $('#c-purge').onclick = async () => {
+    const p = $('#c-prefix').value.trim();
+    try {
+      const r = await api(`/apps/${encodeURIComponent(current)}/cache/purge${p ? `?prefix=${encodeURIComponent(p)}` : ''}`, { method: 'POST' });
+      status($('#c-status'), `清掉 ${r.purged} 筆`, true);
+      refresh();
+    } catch (e) { status($('#c-status'), e.message, false); }
+  };
+
+  // ---------- Analytics、佇列 ----------
+  $('#sql-run').onclick = async () => {
+    try {
+      const r = await api('/analytics/sql', { method: 'POST', body: $('#sql').value });
+      const cols = r.meta.map((m) => m.name);
+      $('#sql-table').innerHTML = `<thead><tr>${cols.map((c) => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${
+        r.data.map((row) => `<tr>${cols.map((c) => `<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}</tbody>`;
+      status($('#sql-status'), `${r.rows} 筆`, true);
+    } catch (e) { status($('#sql-status'), e.message, false); }
+  };
+  async function loadQueues() {
+    const q = await api('/queues');
+    $('#q-rows').innerHTML = q.map((x) => `<tr><td>${esc(x.queue)}</td><td>${x.messages}</td></tr>`).join('')
+      || '<tr><td colspan="2" class="muted">沒有訊息</td></tr>';
+  }
+
+  document.querySelectorAll('#top button').forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll('#top button').forEach((x) => x.classList.toggle('on', x === b));
+      for (const v of ['apps', 'analytics', 'queues']) $(`#view-${v}`).classList.toggle('hidden', v !== b.dataset.view);
+      if (b.dataset.view === 'queues') loadQueues();
+    };
+  });
+
+  refresh();
+  setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+})();
+</script>
+</body>
+</html>
