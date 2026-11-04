@@ -24,3 +24,9 @@ path = "friendbook"
 port = 8712
 env_file = "friendbook/.dev.vars.example"
 d1_init = { DB = "schema.sql" }
+
+# WebSocket 聊天室（Durable Object + hibernation API）
+[[app]]
+path = "chat"
+port = 8713
+instances = 2

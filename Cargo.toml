@@ -1,6 +1,6 @@
 [package]
 name = "rucloud"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A self-hostable Cloudflare-Workers-like platform: Rust edge gateway + D1/KV/R2/Queues/Cron/Durable Objects/Vectorize/AI Gateway bindings, running Worker code on Node.js"
@@ -26,6 +26,8 @@ clap = { version = "4", features = ["derive"] }
 cron = "0.15"
 futures-util = "0.3"
 hex = "0.4"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 json5 = "0.4"
 md-5 = "0.10"
 mime_guess = "2"

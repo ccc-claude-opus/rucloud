@@ -1,5 +1,13 @@
 # 更新紀錄
 
+## 0.2.0 — WebSocket
+
+* 閘道支援 HTTP upgrade：對 Worker 程序用原始 TCP 轉發，101 之後兩邊直接對接，不解讀訊框。
+* Worker：`WebSocketPair`、`new Response(null, { status: 101, webSocket })`、`accept()`、`send()`、`close()`、`addEventListener` / `onmessage`。101 送出前 `send()` 的訊息會先存著，接上後再送。
+* Durable Objects：`stub.fetch()` 可以轉發 upgrade（跨程序也行）；hibernation API：`ctx.acceptWebSocket(ws, tags)`、`getWebSockets(tag)`、`getTags`、`webSocketMessage / webSocketClose / webSocketError`、`serializeAttachment / deserializeAttachment`、`setWebSocketAutoResponse`。
+* Service bindings 與 edge 也能轉發 WebSocket。
+* 新範例 `examples/chat`：每個房間一個 Durable Object 的聊天室。
+
 ## 0.1.1
 
 * 新增範例 `examples/myshop`（D1、HMAC cookie、PBKDF2）與 `examples/friendbook`（D1 + KV），取自 cloudflare/test-apps；示範用密鑰放在 `.dev.vars.example`。

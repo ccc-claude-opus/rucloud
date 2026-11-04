@@ -15,7 +15,22 @@
 | `node:*` 模組 | 都能用（等同永遠開著 `nodejs_compat`） |
 | TypeScript `main` | Node 24 的型別剝除（只支援可直接剝除的語法） |
 | CPU 時間限制 | 沒有 |
-| `HTMLRewriter`、`WebSocketPair`、`connect()` | 不支援 |
+| `WebSocketPair`、101 回應 | ✓（見下方 WebSocket 一節） |
+| `HTMLRewriter`、`connect()` | 不支援 |
+
+## WebSocket
+
+```js
+const [client, server] = Object.values(new WebSocketPair());
+server.accept();
+server.addEventListener('message', (e) => server.send(`echo: ${e.data}`));
+return new Response(null, { status: 101, webSocket: client });
+```
+
+* 閘道把 upgrade 請求用原始 TCP 轉給 Worker 程序，101 之後位元組直接對接；WebSocket 訊框由 Node 端的 rucloud 執行環境處理（文字、二進位、分段、ping/pong、close）。
+* 轉給 Durable Object（`return stub.fetch(request)`）或 service binding 時，跨程序同樣是位元組對接，不會多一層解碼。
+* 101 送出前 `send()` 的訊息會先排隊，連線接上後依序送出。
+* 單則訊息上限 32 MB。不支援 `permessage-deflate` 壓縮，也不支援 Worker 主動連出去的 `fetch()` upgrade（請改用 Node 內建的 `WebSocket` 客戶端）。
 
 ## Static Assets
 
@@ -73,7 +88,8 @@
 | `ctx.storage`：`get/put/delete/list/deleteAll`、`getAlarm/setAlarm/deleteAlarm`、`transaction` | ✓（KV 型 storage） |
 | `ctx.blockConcurrencyWhile` | ✓ |
 | `alarm()` | ✓；失敗 10 秒後重試 |
-| `ctx.storage.sql`、WebSocket hibernation | 不支援 |
+| WebSocket hibernation：`ctx.acceptWebSocket(ws, tags)`、`getWebSockets(tag)`、`getTags`、`setWebSocketAutoResponse`、`webSocketMessage/Close/Error`、`serializeAttachment` | ✓（物件不會真的休眠，一直留在記憶體） |
+| `ctx.storage.sql` | 不支援 |
 
 同一個物件的事件是**完全依序**處理（比 Cloudflare 的 input gate 嚴格），所以物件之間互相呼叫形成環的話會卡住。
 

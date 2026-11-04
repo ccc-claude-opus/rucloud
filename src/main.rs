@@ -17,6 +17,7 @@ mod queues;
 mod r2;
 mod server;
 mod vectorize;
+mod ws;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

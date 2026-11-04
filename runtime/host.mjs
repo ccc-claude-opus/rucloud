@@ -8,6 +8,7 @@
 // 設定由環境變數 RUCLOUD_SPEC（JSON）傳進來。
 
 import http from 'node:http';
+import net from 'node:net';
 import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
@@ -85,6 +86,298 @@ function deser(text) {
       default: return v;
     }
   });
+}
+
+// ---------- WebSocket ----------
+//
+// Cloudflare 的寫法：const [client, server] = Object.values(new WebSocketPair());
+//   server.accept(); server.addEventListener('message', ...);
+//   return new Response(null, { status: 101, webSocket: client });
+// client 端在這裡接上真正的連線（rucloud 自己實作 WebSocket 訊框），server 端給 Worker 用。
+
+// Node 的 Response 不接受 status 101，包一層讓它可以帶 webSocket
+const NativeResponse = globalThis.Response;
+class Response extends NativeResponse {
+  constructor(body, init) {
+    if (init && init.status === 101) {
+      super(null, { ...init, status: 200 });
+      Object.defineProperty(this, '_switching', { value: true });
+      Object.defineProperty(this, '_webSocket', { value: init.webSocket ?? null });
+    } else {
+      super(body, init);
+    }
+  }
+  get status() { return this._switching ? 101 : super.status; }
+  get ok() { return this._switching ? false : super.ok; }
+  get webSocket() { return this._webSocket ?? null; }
+  static [Symbol.hasInstance](x) { return x instanceof NativeResponse; }
+}
+globalThis.Response = Response;
+
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const MAX_WS_MESSAGE = 32 * 1024 * 1024;
+
+class CfWebSocket extends EventTarget {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  constructor() {
+    super();
+    this.readyState = 1;
+    this.url = null;
+    this.protocol = '';
+    this.extensions = '';
+    this._peer = null;
+    this._transport = null;   // 只有接上真實連線的那一端有
+    this._accepted = false;
+    this._queue = [];
+    this._hib = null;          // Durable Object 的 hibernation：{ inst, tags }
+    this._attachment = undefined;
+  }
+  accept() {
+    if (this._accepted) return;
+    this._accepted = true;
+    for (const [type, props] of this._queue.splice(0)) this._dispatch(type, props);
+  }
+  send(data) {
+    if (this.readyState !== 1) throw new Error('WebSocket 已經關閉');
+    const peer = this._peer;
+    if (peer._transport) peer._transport.send(data);
+    else if (peer._isClient) peer._outbox.push(data);  // 101 還沒送出：先存著，接上連線再送
+    else peer._dispatch('message', { data });
+  }
+  close(code = 1000, reason = '') {
+    if (this.readyState >= 2) return;
+    this.readyState = 2;
+    const peer = this._peer;
+    if (peer._transport) peer._transport.close(code, reason);
+    else if (peer._isClient) peer._outbox.push({ close: [code, reason] });
+    else { peer._dispatch('close', { code, reason, wasClean: true }); this._closed(code, reason, true); }
+  }
+  serializeAttachment(v) { this._attachment = structuredClone(v); }
+  deserializeAttachment() { return structuredClone(this._attachment); }
+  _closed(code, reason, wasClean) {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    this._dispatch('close', { code, reason, wasClean });
+  }
+  _dispatch(type, props) {
+    if (!this._accepted) { this._queue.push([type, props]); return; }
+    if (this._hib) { hibernationEvent(this, type, props); return; }
+    const ev = new Event(type);
+    Object.assign(ev, props);
+    this.dispatchEvent(ev);
+    try { this[`on${type}`]?.(ev); } catch (e) { console.error(e); }
+  }
+}
+
+globalThis.WebSocketPair = function WebSocketPair() {
+  const client = new CfWebSocket();
+  const server = new CfWebSocket();
+  client._peer = server;
+  server._peer = client;
+  client._accepted = true;
+  client._isClient = true;
+  client._outbox = [];
+  return { 0: client, 1: server };
+};
+
+globalThis.WebSocketRequestResponsePair = class WebSocketRequestResponsePair {
+  constructor(request, response) { this.request = request; this.response = response; }
+};
+
+// Durable Object 的 hibernation handler：webSocketMessage / webSocketClose / webSocketError
+function hibernationEvent(ws, type, props) {
+  const { inst } = ws._hib;
+  const obj = inst.obj;
+  if (type === 'message') {
+    const auto = inst.state._autoResponse;
+    if (auto && props.data === auto.request) { ws.send(auto.response); return; }
+    serial(inst, () => obj.webSocketMessage?.(ws, props.data)).catch((e) => console.error('webSocketMessage：', e));
+  } else if (type === 'close') {
+    inst.state._sockets.delete(ws);
+    serial(inst, () => obj.webSocketClose?.(ws, props.code, props.reason, props.wasClean)).catch((e) => console.error('webSocketClose：', e));
+  } else if (type === 'error') {
+    serial(inst, () => obj.webSocketError?.(ws, props.error)).catch((e) => console.error('webSocketError：', e));
+  }
+}
+
+// 在一條已經完成 handshake 的連線上收發 WebSocket 訊框（伺服器端：送出不加遮罩）
+function wsTransport(socket, head, client) {
+  let buf = head?.length ? Buffer.from(head) : Buffer.alloc(0);
+  let frags = [];
+  let fragOp = 0;
+  let closeSent = false;
+  let done = false;
+  const server = client._peer;
+  socket.setNoDelay(true);
+
+  const frame = (op, payload) => {
+    const len = payload.length;
+    let hdr;
+    if (len < 126) hdr = Buffer.from([0x80 | op, len]);
+    else if (len < 65536) { hdr = Buffer.alloc(4); hdr[0] = 0x80 | op; hdr[1] = 126; hdr.writeUInt16BE(len, 2); }
+    else { hdr = Buffer.alloc(10); hdr[0] = 0x80 | op; hdr[1] = 127; hdr.writeBigUInt64BE(BigInt(len), 2); }
+    if (!socket.destroyed) socket.write(Buffer.concat([hdr, payload]));
+  };
+  const finish = (code, reason, wasClean) => {
+    if (done) return;
+    done = true;
+    server._closed(code, reason, wasClean);
+    client.readyState = 3;
+  };
+  const transport = {
+    send(data) {
+      if (closeSent) return;
+      if (typeof data === 'string') frame(0x1, Buffer.from(data, 'utf8'));
+      else if (data instanceof ArrayBuffer) frame(0x2, Buffer.from(data));
+      else if (ArrayBuffer.isView(data)) frame(0x2, Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+      else frame(0x1, Buffer.from(String(data), 'utf8'));
+    },
+    close(code = 1000, reason = '') {
+      if (closeSent) return;
+      closeSent = true;
+      const r = Buffer.from(String(reason).slice(0, 120), 'utf8');
+      const p = Buffer.alloc(2 + r.length);
+      p.writeUInt16BE(code, 0);
+      r.copy(p, 2);
+      frame(0x8, p);
+      setTimeout(() => socket.destroy(), 5000).unref();
+    },
+  };
+  client._transport = transport;
+  for (const m of client._outbox.splice(0)) {
+    if (m && m.close) transport.close(...m.close);
+    else transport.send(m);
+  }
+
+  const deliver = (op, payload) => {
+    const data = op === 0x1 ? payload.toString('utf8') : payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+    server._dispatch('message', { data });
+  };
+  socket.on('data', (chunk) => {
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    while (buf.length >= 2) {
+      const fin = (buf[0] & 0x80) !== 0;
+      const op = buf[0] & 0x0f;
+      const masked = (buf[1] & 0x80) !== 0;
+      let len = buf[1] & 0x7f;
+      let off = 2;
+      if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; }
+      else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); off = 10; }
+      if (len > MAX_WS_MESSAGE) { transport.close(1009, 'message too big'); socket.destroy(); return; }
+      const maskAt = off;
+      if (masked) off += 4;
+      if (buf.length < off + len) return;
+      const payload = Buffer.from(buf.subarray(off, off + len));
+      if (masked) for (let i = 0; i < len; i++) payload[i] ^= buf[maskAt + (i & 3)];
+      buf = buf.subarray(off + len);
+      if (op === 0x0) {
+        frags.push(payload);
+        if (fin) { deliver(fragOp, Buffer.concat(frags)); frags = []; }
+      } else if (op === 0x1 || op === 0x2) {
+        if (fin) deliver(op, payload);
+        else { fragOp = op; frags = [payload]; }
+      } else if (op === 0x8) {
+        const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1005;
+        const reason = payload.length > 2 ? payload.subarray(2).toString('utf8') : '';
+        if (!closeSent) transport.close(code === 1005 ? 1000 : code, reason);
+        finish(code, reason, true);
+        socket.end();
+        return;
+      } else if (op === 0x9) {
+        frame(0xA, payload);
+      }
+    }
+  });
+  socket.on('error', (e) => { if (!done) server._dispatch('error', { error: e, message: e.message }); });
+  socket.on('close', () => finish(1006, '', false));
+}
+
+// 本機 Worker 回了 101 + webSocket：完成 handshake，接上訊框處理
+function acceptLocalWebSocket(req, socket, head, response) {
+  const key = req.headers['sec-websocket-key'];
+  if (!key) { socket.end('HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\n\r\n'); return; }
+  const accept = createHash('sha1').update(key + WS_GUID).digest('base64');
+  let out = `HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\nsec-websocket-accept: ${accept}\r\n`;
+  response.headers.forEach((v, k) => {
+    if (!/^(upgrade|connection|sec-websocket-accept|content-length|content-type)$/i.test(k)) out += `${k}: ${v}\r\n`;
+  });
+  socket.write(`${out}\r\n`);
+  wsTransport(socket, head, response.webSocket);
+}
+
+// 回應來自另一個程序（Durable Object、service binding）：兩條連線的位元組直接對接
+function spliceTunnel(socket, head, tunnel) {
+  let out = 'HTTP/1.1 101 Switching Protocols\r\n';
+  tunnel.headers.forEach((v, k) => { out += `${k}: ${v}\r\n`; });
+  socket.write(`${out}\r\n`);
+  if (tunnel.rest.length) socket.write(tunnel.rest);
+  if (head?.length) tunnel.socket.write(head);
+  socket.setNoDelay(true);
+  tunnel.socket.setNoDelay(true);
+  socket.pipe(tunnel.socket).pipe(socket);
+  const kill = () => { socket.destroy(); tunnel.socket.destroy(); };
+  socket.on('error', kill).on('close', kill);
+  tunnel.socket.on('error', kill).on('close', kill);
+}
+
+const isUpgrade = (req) => (req.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+
+// 對 rucloud 的綁定 API 送一個 upgrade 請求（給 DO stub.fetch、service binding 用）
+function upgradeVia(path, req, extra) {
+  const { hostname, port } = new URL(B);
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(Number(port), hostname);
+    sock.once('error', reject);
+    sock.once('connect', () => {
+      let head = `GET ${path} HTTP/1.1\r\nhost: ${hostname}:${port}\r\nx-rucloud-token: ${spec.token}\r\n`;
+      req.headers.forEach((v, k) => { if (!/^(host|x-rucloud-)/i.test(k)) head += `${k}: ${v}\r\n`; });
+      for (const [k, v] of Object.entries(extra)) head += `${k}: ${v}\r\n`;
+      sock.write(`${head}\r\n`);
+    });
+    let buf = Buffer.alloc(0);
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      const i = buf.indexOf('\r\n\r\n');
+      if (i < 0) return;
+      sock.off('data', onData);
+      sock.off('error', reject);
+      const lines = buf.subarray(0, i).toString('latin1').split('\r\n');
+      const status = Number(lines[0].split(' ')[1]);
+      const headers = new Headers();
+      for (const l of lines.slice(1)) {
+        const j = l.indexOf(':');
+        if (j > 0) headers.append(l.slice(0, j).trim(), l.slice(j + 1).trim());
+      }
+      const rest = buf.subarray(i + 4);
+      if (status === 101) {
+        sock.pause();
+        const r = new Response(null, { status: 101, headers });
+        Object.defineProperty(r, '_tunnel', { value: { socket: sock, headers, rest } });
+        resolve(r);
+        return;
+      }
+      const want = Number(headers.get('content-length') ?? -1);
+      const chunks = [rest];
+      let got = rest.length;
+      const fin = () => { sock.destroy(); resolve(new Response(Buffer.concat(chunks), { status, headers })); };
+      if (want >= 0 && got >= want) return fin();
+      sock.on('data', (c) => { chunks.push(c); got += c.length; if (want >= 0 && got >= want) fin(); });
+      sock.on('end', fin);
+    };
+    sock.on('data', onData);
+  });
+}
+
+// 本機寫出一般（非 101）回應後關閉連線
+async function writeRawResponse(socket, response) {
+  const body = Buffer.from(await response.arrayBuffer());
+  let out = `HTTP/1.1 ${response.status} ${response.statusText || 'Error'}\r\n`;
+  response.headers.forEach((v, k) => { if (!/^(content-length|transfer-encoding|connection)$/i.test(k)) out += `${k}: ${v}\r\n`; });
+  out += `content-length: ${body.length}\r\nconnection: close\r\n\r\n`;
+  socket.end(Buffer.concat([Buffer.from(out, 'latin1'), body]));
 }
 
 // ---------- D1 ----------
@@ -353,6 +646,7 @@ function makeStub(binding, id) {
     name: id.name,
     async fetch(input, init) {
       const req = new Request(input, init);
+      if (isUpgrade(req)) return upgradeVia(`/b/${enc(spec.app)}/do/${enc(binding)}/${id}/fetch`, req, { 'x-rucloud-do-url': req.url });
       const headers = new Headers(req.headers);
       headers.set('x-rucloud-token', spec.token);
       headers.set('x-rucloud-do-url', req.url);
@@ -430,6 +724,8 @@ class DurableObjectState {
     this.id = new DurableObjectId(id);
     this.storage = new DurableObjectStorage(ns, id);
     this._blockers = [];
+    this._sockets = new Set();
+    this._autoResponse = null;
   }
   blockConcurrencyWhile(fn) {
     const p = Promise.resolve().then(fn);
@@ -437,8 +733,19 @@ class DurableObjectState {
     return p;
   }
   waitUntil(p) { Promise.resolve(p).catch((e) => console.error('waitUntil:', e)); }
-  acceptWebSocket() { throw new Error('rucloud 尚未支援 Durable Object 的 WebSocket'); }
-  getWebSockets() { return []; }
+  // WebSocket hibernation API：訊息改由物件的 webSocketMessage / webSocketClose 處理
+  acceptWebSocket(ws, tags = []) {
+    if (!(ws instanceof CfWebSocket)) throw new TypeError('acceptWebSocket 需要 WebSocketPair 的 server 端');
+    ws._hib = { inst: this._inst, tags: [...tags].map(String) };
+    this._sockets.add(ws);
+    ws.accept();
+  }
+  getWebSockets(tag) {
+    return [...this._sockets].filter((ws) => ws.readyState === 1 && (tag === undefined || ws._hib.tags.includes(tag)));
+  }
+  getTags(ws) { return ws._hib ? [...ws._hib.tags] : []; }
+  setWebSocketAutoResponse(pair) { this._autoResponse = pair || null; }
+  getWebSocketAutoResponse() { return this._autoResponse || null; }
 }
 
 const doInstances = new Map();
@@ -451,7 +758,9 @@ function getInstance(ns, id) {
     const Cls = def && workerModule[def.className];
     if (typeof Cls !== 'function') throw new Error(`Durable Object 類別 ${def?.className ?? ns} 沒有從 main 模組 export`);
     const state = new DurableObjectState(ns, id);
-    inst = { state, obj: new Cls(state, env) };
+    inst = { state, obj: null };
+    state._inst = inst;
+    inst.obj = new Cls(state, env);
     // 建構子裡 blockConcurrencyWhile 的工作做完之前，事件都要排隊
     inst.chain = Promise.all(state._blockers).catch((e) => console.error(e));
     doInstances.set(key, inst);
@@ -495,6 +804,7 @@ function makeService(binding) {
   return {
     async fetch(input, init) {
       const req = new Request(input, init);
+      if (isUpgrade(req)) return upgradeVia(`/b/${enc(spec.app)}/service/${enc(binding)}`, req, { 'x-rucloud-svc-url': req.url });
       const headers = new Headers(req.headers);
       headers.set('x-rucloud-token', spec.token);
       headers.set('x-rucloud-svc-url', req.url);
@@ -764,6 +1074,42 @@ const server = http.createServer({ keepAliveTimeout: 65_000, requestTimeout: 0 }
     console.error(e?.stack || e);
     try { if (!res.headersSent) res.writeHead(500); res.end(); } catch { /* 連線已斷 */ }
   });
+});
+
+// WebSocket：先照一般請求呼叫 Worker（或 Durable Object），依回應決定怎麼接
+async function handleUpgrade(req, socket, head) {
+  socket.on('error', () => {});
+  const kind = req.headers['x-rucloud-kind'];
+  let response;
+  if (kind) {
+    if (req.headers['x-rucloud-token'] !== spec.token || kind !== 'do') return socket.destroy();
+    const inst = getInstance(req.headers['x-rucloud-do-ns'], req.headers['x-rucloud-do-id']);
+    const request = toRequest(req, req.headers['x-rucloud-do-url']);
+    try {
+      response = await serial(inst, () => inst.obj.fetch(request));
+    } catch (e) {
+      console.error(e?.stack || e);
+      response = new Response(`Durable Object threw exception:\n${e?.stack || e}\n`, { status: 500 });
+    }
+  } else {
+    const ctx = makeCtx();
+    try {
+      if (!fetchHandler) throw new Error('Worker 沒有 fetch() handler');
+      response = await fetchHandler(toRequest(req), ctx);
+    } catch (e) {
+      console.error(e?.stack || e);
+      response = new Response(`Worker threw exception:\n${e?.stack || e}\n`, { status: 500 });
+    }
+    ctx._drain();
+  }
+  if (response?.status === 101 && response._tunnel) return spliceTunnel(socket, head, response._tunnel);
+  if (response?.status === 101 && response.webSocket) return acceptLocalWebSocket(req, socket, head, response);
+  if (response?.status === 101) response = new Response('101 回應缺少 webSocket\n', { status: 500 });
+  await writeRawResponse(socket, response || new Response('沒有回應\n', { status: 500 }));
+}
+
+server.on('upgrade', (req, socket, head) => {
+  handleUpgrade(req, socket, head).catch((e) => { console.error(e?.stack || e); socket.destroy(); });
 });
 
 server.listen(0, '127.0.0.1', () => {

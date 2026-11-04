@@ -1,0 +1,9 @@
+// WebSocket 聊天室：每個房間是一個 Durable Object（hibernation API）
+{
+  "name": "chat",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "run_worker_first": ["/ws", "/echo"] },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "ChatRoom" }] },
+  "migrations": [{ "tag": "v1", "new_classes": ["ChatRoom"] }]
+}

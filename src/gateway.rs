@@ -99,10 +99,8 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
 pub async fn forward(app: &App, affinity: Option<usize>, req: Request, extra: &[(&str, String)]) -> anyhow::Result<Response<Body>> {
     let pool = app.pool.as_ref().ok_or_else(|| anyhow::anyhow!("{} 沒有 Worker", app.name))?;
     let port = pool.port(affinity).await?;
-    let (parts, body) = req.into_parts();
-    let pq = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let mut headers = HeaderMap::new();
-    for (k, v) in parts.headers.iter() {
+    for (k, v) in req.headers().iter() {
         let name = k.as_str();
         if HOP_BY_HOP.contains(&name) || name == "host" || name.starts_with("x-rucloud-") {
             continue;
@@ -114,6 +112,11 @@ pub async fn forward(app: &App, affinity: Option<usize>, req: Request, extra: &[
             headers.insert(n, v);
         }
     }
+    let pq = req.uri().path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| "/".into());
+    if crate::ws::is_upgrade(req.headers()) {
+        return crate::ws::tunnel(req, port, &pq, &headers).await;
+    }
+    let (parts, body) = req.into_parts();
     let resp = app
         .http
         .request(parts.method, format!("http://127.0.0.1:{port}{pq}"))
