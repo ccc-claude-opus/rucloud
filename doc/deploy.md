@@ -44,6 +44,14 @@ rate_limit = { limit = 120, period = 60 }
 [ai_gateway.providers]
 ollama = "http://localhost:11434"
 
+# 管理埠（可省略）：/health、/metrics、/apps/<應用>/logs、/apps/<應用>/tail
+[admin]
+port = 8799
+bind = "127.0.0.1"               # 預設只聽本機
+token = "換成很長的亂數"           # 可省略；設定後 /apps/* 需要驗證（health、metrics 不用）
+
+shutdown_timeout = 30            # 收到 SIGTERM 後最多等幾秒讓請求做完
+
 # R2 的 S3 相容 API（可省略）
 [s3]
 port = 8780
@@ -69,6 +77,17 @@ max_block_ms = 30000             # 事件迴圈卡住多久就重開程序（0 =
 ```
 
 TLS 建議交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）。rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。
+
+### 監控
+
+```bash
+curl localhost:8799/health                 # 關閉中回 503
+curl localhost:8799/metrics                # 給 Prometheus 抓
+rucloud tail myshop --admin http://127.0.0.1:8799 --token …   # 即時 log
+rucloud tail myshop --kind error           # 只看錯誤
+```
+
+log 也會存成每天一個檔：`<state>/<應用>/logs/YYYY-MM-DD.log`（JSON lines）。
 
 ## 3. Docker
 

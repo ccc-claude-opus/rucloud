@@ -46,18 +46,23 @@ pub async fn edge_handler(
 }
 
 pub async fn handle(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body> {
+    use std::sync::atomic::Ordering;
     let start = Instant::now();
     let method = req.method().clone();
     let path = req.uri().path().to_string();
+    app.metrics.inflight.fetch_add(1, Ordering::Relaxed);
     let resp = route(app, req, peer).await;
-    tracing::info!(
-        "[{}] {} {} {} {:.1}ms",
-        app.name,
-        method,
-        path,
-        resp.status().as_u16(),
-        start.elapsed().as_secs_f64() * 1000.0
-    );
+    app.metrics.inflight.fetch_sub(1, Ordering::Relaxed);
+    let secs = start.elapsed().as_secs_f64();
+    let kind = if resp.extensions().get::<crate::assets::AssetHit>().is_some() {
+        "asset"
+    } else {
+        "worker"
+    };
+    app.metrics.request(kind, resp.status().as_u16(), secs);
+    let line = format!("{method} {path} {} {:.1}ms", resp.status().as_u16(), secs * 1000.0);
+    tracing::info!("[{}] {line}", app.name);
+    app.logs.push("request", &line, false);
     resp
 }
 
@@ -125,14 +130,21 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
     if !req.headers().contains_key("x-forwarded-for") {
         extra.push(("x-forwarded-for", peer.ip().to_string()));
     }
-    match forward(app, None, req, &extra).await {
+    match forward(app, None, req, &extra, true).await {
         Ok(r) => r,
         Err(e) => (StatusCode::BAD_GATEWAY, format!("rucloud：Worker 沒有回應：{e:#}\n")).into_response(),
     }
 }
 
 /// 把請求轉給某個 Worker 程序。外來的 x-rucloud-* 標頭一律拿掉，避免偽造內部呼叫。
-pub async fn forward(app: &App, affinity: Option<usize>, req: Request, extra: &[(&str, String)]) -> anyhow::Result<Response<Body>> {
+/// external = true：來自外部使用者（計入 WebSocket 連線數）；false：內部轉送（DO、service）
+pub async fn forward(
+    app: &App,
+    affinity: Option<usize>,
+    req: Request,
+    extra: &[(&str, String)],
+    external: bool,
+) -> anyhow::Result<Response<Body>> {
     let pool = app.pool.as_ref().ok_or_else(|| anyhow::anyhow!("{} 沒有 Worker", app.name))?;
     let port = pool.port(affinity).await?;
     let mut headers = HeaderMap::new();
@@ -154,7 +166,7 @@ pub async fn forward(app: &App, affinity: Option<usize>, req: Request, extra: &[
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "/".into());
     if crate::ws::is_upgrade(req.headers()) {
-        return crate::ws::tunnel(req, port, &pq, &headers).await;
+        return crate::ws::tunnel(req, port, &pq, &headers, external.then(|| app.metrics.clone())).await;
     }
     let (parts, body) = req.into_parts();
     let resp = app

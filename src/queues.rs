@@ -63,6 +63,17 @@ impl Queues {
         Ok(messages.len())
     }
 
+    /// 每個佇列的訊息數（含延遲中、處理中的），給 /metrics 用
+    pub fn depth(&self) -> Vec<(String, i64)> {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT queue, COUNT(*) FROM messages GROUP BY queue ORDER BY queue") else {
+            return vec![];
+        };
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// (可取的訊息數, 最早可取的時間)
     fn ready(&self, queue: &str) -> Result<(i64, Option<i64>)> {
         let conn = self.conn.lock().unwrap();

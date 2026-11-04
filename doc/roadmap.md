@@ -33,7 +33,7 @@
 | 版本 | 主題 | 內容 |
 |---|---|---|
 | 0.8.0 ✓ | 測試與 CI | `tests/` 整合測試（`cargo test` 起 rucloud、跑 examples 與各綁定、WebSocket、S3、沙箱）；GitHub Actions（fmt、clippy、test、Docker build） |
-| 0.9.0 | 維運 | SIGTERM 優雅關閉（停止收新請求、等進行中的請求、關掉 Worker 程序）；`/__rucloud/metrics`（Prometheus：請求數、延遲、Worker 重啟、綁定呼叫）；log 存檔與 `rucloud tail <應用>`；健康檢查端點 |
+| 0.9.0 ✓ | 維運 | SIGTERM 優雅關閉（停止收新請求、等進行中的請求、關掉 Worker 程序）；`/__rucloud/metrics`（Prometheus：請求數、延遲、Worker 重啟、綁定呼叫）；log 存檔與 `rucloud tail <應用>`；健康檢查端點 |
 | 0.10.0 | 部署 | 管理 API（token 驗證）：上傳新版本（tar）、版本列表、rollback、熱重載設定；`rucloud deploy` 指令；Durable Object 閒置逐出；`rucloud backup` / `restore`（SQLite 線上備份） |
 | 0.11.0 | 邊緣 | 自動 HTTPS（ACME / Let's Encrypt）；依 `Cache-Control` 快取 Worker 回應、`caches.default` 跨程序共用；靜態檔案 gzip / brotli |
 | 0.12.0 | 執行環境 | Workflows（`step.do` / `step.sleep` / `step.waitForEvent`，進度存 SQLite，可重試、可恢復）；service binding RPC 與具名 entrypoint；Worker 主動連出的 WebSocket（`fetch` + `Upgrade`） |

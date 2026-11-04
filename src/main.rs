@@ -2,6 +2,7 @@
 //! Rust 負責邊緣閘道、靜態檔案、所有資料綁定（D1/KV/R2/Queues/DO/Vectorize）與排程；
 //! Worker 的 JS 程式碼跑在 Node.js 程序裡。
 
+mod admin;
 mod ai;
 mod ai_gateway;
 mod app;
@@ -13,6 +14,7 @@ mod d1;
 mod durable;
 mod gateway;
 mod kv;
+mod observe;
 mod pool;
 mod queues;
 mod r2;
@@ -74,6 +76,9 @@ enum Cmd {
         /// 事件迴圈卡住超過幾毫秒就重開程序（0 = 不檢查）
         #[arg(long, default_value_t = 30_000)]
         max_block_ms: u64,
+        /// 開管理埠（/health、/metrics、log；只聽 127.0.0.1）
+        #[arg(long)]
+        admin_port: Option<u16>,
         /// 開 R2 的 S3 相容 API（金鑰取自 RUCLOUD_S3_ACCESS_KEY_ID / RUCLOUD_S3_SECRET_ACCESS_KEY）
         #[arg(long)]
         s3_port: Option<u16>,
@@ -97,6 +102,26 @@ enum Cmd {
     R2 {
         #[command(subcommand)]
         cmd: cli::R2Cmd,
+    },
+    /// 即時看應用的 log（連到 rucloud 的管理埠）
+    Tail {
+        /// 應用名稱
+        app: String,
+        /// 管理埠的網址
+        #[arg(long, default_value = "http://127.0.0.1:8799")]
+        admin: String,
+        /// 管理 token（也可以用環境變數 RUCLOUD_ADMIN_TOKEN）
+        #[arg(long, env = "RUCLOUD_ADMIN_TOKEN")]
+        token: Option<String>,
+        /// 先印出最近幾筆
+        #[arg(short, default_value_t = 20)]
+        n: usize,
+        /// 只看某一種：console、error、request
+        #[arg(long)]
+        kind: Option<String>,
+        /// 輸出原始 JSON
+        #[arg(long)]
+        json: bool,
     },
     /// 單獨跑 AI Gateway
     AiGateway {
@@ -134,6 +159,7 @@ async fn main() -> Result<()> {
             max_block_ms,
             env,
             d1_migrate,
+            admin_port,
         } => {
             let s3 = match s3_port {
                 Some(port) => Some(s3::S3Cfg {
@@ -156,6 +182,12 @@ async fn main() -> Result<()> {
                 edge: None,
                 ai_gateway: None,
                 s3,
+                admin: admin_port.map(|port| config::AdminCfg {
+                    port,
+                    bind: "127.0.0.1".into(),
+                    token: None,
+                }),
+                shutdown_timeout: 10,
                 apps: vec![AppEntry {
                     path: app,
                     name: None,
@@ -172,6 +204,7 @@ async fn main() -> Result<()> {
                     allow_write: vec![],
                     memory_mb,
                     max_block_ms: Some(max_block_ms),
+                    log_files: true,
                 }],
             };
             server::run(cfg, true).await
@@ -179,6 +212,14 @@ async fn main() -> Result<()> {
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
+        Cmd::Tail {
+            app,
+            admin,
+            token,
+            n,
+            kind,
+            json,
+        } => cli::tail(&admin, &app, token.as_deref(), n, kind.as_deref(), json).await,
         Cmd::R2 { cmd } => cli::r2(cmd),
         Cmd::AiGateway {
             port,

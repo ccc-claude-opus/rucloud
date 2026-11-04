@@ -5,6 +5,11 @@ state_dir = "/data"
 [edge]
 port = 8700
 
+# 管理埠：/health、/metrics、log（docker-compose 只對本機開放）
+[admin]
+port = 8799
+bind = "0.0.0.0"
+
 # AI Gateway：http://localhost:8790/<gateway>/<provider>/...
 [ai_gateway]
 port = 8790

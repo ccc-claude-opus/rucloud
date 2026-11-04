@@ -12,11 +12,17 @@ services:
       - "8703:8703"   # myshop
       - "8704:8704"   # friendbook
       - "8790:8790"   # AI Gateway
+      - "127.0.0.1:8799:8799"   # 管理埠（health、metrics、log）
     volumes:
       - ${TEST_APPS:-../cloudflare/test-apps}:/apps:ro
       - ./docker/rucloud.toml:/etc/rucloud/rucloud.toml:ro
       - rucloud-data:/data
     restart: unless-stopped
+    stop_grace_period: 40s   # rucloud 收到 SIGTERM 後最多等 30 秒讓請求做完
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8799/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
 
 volumes:
   rucloud-data:

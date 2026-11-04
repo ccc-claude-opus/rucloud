@@ -75,6 +75,7 @@ flowchart LR
 | `rucloud d1 migrations create \| list \| apply <應用資料夾> <資料庫>` | D1 migrations（同 wrangler 的格式） |
 | `rucloud kv put \| get \| list \| delete <應用資料夾> … --binding KV` | 本機 KV |
 | `rucloud r2 object put \| get \| list \| delete <應用資料夾> <bucket>/<key>` | 本機 R2 |
+| `rucloud tail <應用> [--admin http://127.0.0.1:8799] [--kind error]` | 即時看 log |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
 `rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。

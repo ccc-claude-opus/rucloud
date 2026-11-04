@@ -94,6 +94,14 @@ async fn auth(State(hub): S, req: Request, next: Next) -> Response {
     if expected.is_none_or(|t| req.headers().get("x-rucloud-token").is_none_or(|h| h.as_bytes() != t.as_bytes())) {
         return ApiError(StatusCode::FORBIDDEN, "token 不對".into()).into_response();
     }
+    // /b/<應用>/<種類>/… → 種類（d1、kv、r2…）
+    if let Some((app, kind)) = req.uri().path().strip_prefix("/b/").and_then(|p| {
+        let mut it = p.split('/');
+        Some((it.next()?, it.next()?))
+    }) && let Some(a) = hub.apps.get(&urlencoding::decode(app).map(|s| s.into_owned()).unwrap_or_default())
+    {
+        a.metrics.binding(kind);
+    }
     next.run(req).await
 }
 
@@ -418,7 +426,7 @@ async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String
         ("x-rucloud-do-url", do_url),
         ("x-rucloud-do-id", id.clone()),
     ];
-    Ok(crate::gateway::forward(&app, Some(App::do_affinity(&id)), req, &extra).await?)
+    Ok(crate::gateway::forward(&app, Some(App::do_affinity(&id)), req, &extra, false).await?)
 }
 
 // ---------- Vectorize、AI ----------

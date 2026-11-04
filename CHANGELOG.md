@@ -1,5 +1,16 @@
 # 更新紀錄
 
+## 0.9.0 — 維運
+
+* **優雅關閉**：收到 SIGTERM / Ctrl-C 時停止接受新連線，等進行中的請求做完（`shutdown_timeout`，預設 30 秒），再關掉 Worker 程序。`docker stop` 不會再中斷請求。
+* **管理埠**（`[admin]`，或 `rucloud dev --admin-port`；預設只聽 127.0.0.1）：
+  * `GET /health`：各應用的 Worker 程序狀態；關閉期間回 503。
+  * `GET /metrics`：Prometheus 格式，請求數（分靜態檔案 / Worker、狀態碼類別）、延遲直方圖、處理中的請求、WebSocket 連線數、Worker 重開次數、各種綁定的呼叫次數、佇列訊息數。
+  * `GET /apps/<應用>/logs`、`/apps/<應用>/tail`（SSE）；設定 `token` 後需要驗證。
+* **log**：Worker 的 console 輸出、錯誤與請求紀錄存在記憶體（最近 1000 筆），也每天寫一個 JSON lines 檔（`<state>/<應用>/logs/`，`log_files = false` 可關）。
+* **`rucloud tail <應用>`**：即時看 log，可用 `--kind` 過濾、`--json` 輸出原始資料。
+* docker-compose：開管理埠（只綁本機）、健康檢查、`stop_grace_period`。
+
 ## 0.8.0 — 整合測試與 CI
 
 * `tests/e2e/`：用 Node 內建的 test runner 寫的整合測試，`cargo test` 會一起跑（需要 Node.js）。每個測試檔起一個真的 rucloud，涵蓋：

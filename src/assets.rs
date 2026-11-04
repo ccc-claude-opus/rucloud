@@ -13,6 +13,10 @@ use std::time::SystemTime;
 
 const CACHE_MAX_FILE: u64 = 2 * 1024 * 1024;
 
+/// 掛在回應上的標記：這是靜態檔案（統計用）
+#[derive(Clone, Copy)]
+pub struct AssetHit;
+
 pub struct Assets {
     pub dir: PathBuf,
     worker_first_all: bool,
@@ -172,9 +176,12 @@ impl Assets {
             .header(header::ETAG, &etag)
             .header(header::CACHE_CONTROL, "public, max-age=0, must-revalidate");
         if status == StatusCode::OK && headers.get(header::IF_NONE_MATCH).is_some_and(|v| v.as_bytes() == etag.as_bytes()) {
-            return b.status(StatusCode::NOT_MODIFIED).body(Body::empty()).ok();
+            return b.status(StatusCode::NOT_MODIFIED).extension(AssetHit).body(Body::empty()).ok();
         }
-        b = b.status(status).header(header::CONTENT_LENGTH, HeaderValue::from(len));
+        b = b
+            .status(status)
+            .header(header::CONTENT_LENGTH, HeaderValue::from(len))
+            .extension(AssetHit);
         if head {
             return b.body(Body::empty()).ok();
         }

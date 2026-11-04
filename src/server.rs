@@ -66,7 +66,21 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
         queues: queues.clone(),
     });
+    // 綁定 API 不參與優雅關閉：還在處理的請求可能需要它，程序結束時才停
     tokio::spawn(async move { axum::serve(bind_listener, bindings::router(hub)).await });
+
+    // 對外的伺服器都掛在 shutdown 上：收到 SIGTERM 就停止收新連線，等進行中的請求做完
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let mut servers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    macro_rules! serve {
+        ($listener:expr, $svc:expr) => {{
+            let stop = shutdown.clone();
+            let (listener, svc) = ($listener, $svc);
+            servers.push(tokio::spawn(async move {
+                let _ = axum::serve(listener, svc).with_graceful_shutdown(stop.cancelled_owned()).await;
+            }));
+        }};
+    }
 
     let mut edge_routes: HashMap<String, Arc<App>> = HashMap::new();
     for (app, entry) in &apps {
@@ -80,7 +94,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
                 .await
                 .with_context(|| format!("無法監聽 {addr}"))?;
             let router = Router::new().fallback(any(gateway::app_handler)).with_state(app.clone());
-            tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await });
+            serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
             let shown = if cfg.bind == "0.0.0.0" {
                 "localhost".to_string()
             } else {
@@ -108,7 +122,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
         let router = Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes));
-        tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await });
+        serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
         tracing::info!("edge：http://<應用名稱>.localhost:{}（依 Host 分派）", edge.port);
     }
     if let Some(gw_cfg) = cfg.ai_gateway.clone() {
@@ -117,7 +131,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
-        tokio::spawn(async move { axum::serve(listener, crate::ai_gateway::router(gw)).await });
+        serve!(listener, crate::ai_gateway::router(gw));
         tracing::info!("AI Gateway：http://{addr}/<gateway>/<provider>/...");
     }
 
@@ -128,13 +142,64 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
-        tokio::spawn(async move { axum::serve(listener, crate::s3::router(s3)).await });
+        serve!(listener, crate::s3::router(s3));
         tracing::info!("R2 的 S3 API：http://{addr}（path-style）");
     }
 
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("收到中斷訊號，結束");
+    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(admin_cfg) = cfg.admin.clone() {
+        let addr: SocketAddr = format!("{}:{}", admin_cfg.bind, admin_cfg.port).parse()?;
+        let admin = Arc::new(crate::admin::Admin {
+            apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
+            queues: queues.clone(),
+            token: admin_cfg.token.clone(),
+            draining: draining.clone(),
+        });
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("無法監聽 {addr}"))?;
+        // 管理埠不掛 shutdown：關閉期間 /health 回 503，負載平衡器才知道要把流量移走
+        tokio::spawn(async move { axum::serve(listener, crate::admin::router(admin)).await });
+        tracing::info!("管理埠：http://{addr}（/health、/metrics、/apps/<應用>/tail）");
+    }
+
+    wait_for_signal().await;
+    tracing::info!("收到結束訊號：停止接受新請求，最多等 {} 秒讓進行中的請求做完", cfg.shutdown_timeout);
+    draining.store(true, std::sync::atomic::Ordering::Relaxed);
+    shutdown.cancel();
+    let drained = tokio::time::timeout(Duration::from_secs(cfg.shutdown_timeout), futures_util::future::join_all(servers)).await;
+    if drained.is_err() {
+        tracing::warn!("還有請求沒做完，強制結束");
+    }
+    for (app, _) in &apps {
+        if let Some(pool) = &app.pool {
+            pool.stop();
+        }
+        app.logs.flush();
+    }
+    // 讓 Worker 程序有時間收到 kill
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    tracing::info!("已結束");
     Ok(())
+}
+
+async fn wait_for_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(t) => t,
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 /// Cron Triggers：5 欄位的 cron（UTC），到時間呼叫 scheduled()

@@ -22,6 +22,7 @@ pub struct WorkerSpec {
     pub max_block: Option<Duration>,
     pub http: reqwest::Client,
     pub token: String,
+    pub logs: Arc<crate::observe::Logs>,
 }
 
 /// Worker 程序只拿到這些環境變數；rucloud 自己的環境（金鑰等）不會漏進去
@@ -32,6 +33,8 @@ pub struct Pool {
     rr: AtomicUsize,
     ready: Notify,
     restart: watch::Sender<u64>,
+    stop: tokio_util::sync::CancellationToken,
+    restarts: std::sync::atomic::AtomicU64,
 }
 
 impl Pool {
@@ -43,12 +46,27 @@ impl Pool {
             rr: AtomicUsize::new(0),
             ready: Notify::new(),
             restart,
+            stop: tokio_util::sync::CancellationToken::new(),
+            restarts: std::sync::atomic::AtomicU64::new(0),
         });
         let spec = Arc::new(spec);
         for i in 0..n {
             tokio::spawn(supervise(pool.clone(), spec.clone(), i));
         }
         pool
+    }
+
+    /// 關閉：砍掉所有 Worker 程序，不再重開
+    pub fn stop(&self) {
+        self.stop.cancel();
+    }
+
+    pub fn ready_count(&self) -> usize {
+        self.slots.iter().filter(|p| p.load(Ordering::Acquire) != 0).count()
+    }
+
+    pub fn restarts(&self) -> u64 {
+        self.restarts.load(Ordering::Relaxed)
     }
 
     pub fn len(&self) -> usize {
@@ -132,7 +150,7 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
         // stdin 保持開著：rucloud 結束時管線關閉，Node 端就會自己結束
         let stdin = child.stdin.take();
         if let Some(out) = child.stdout.take() {
-            let (pool, tag) = (pool.clone(), tag.clone());
+            let (pool, logs) = (pool.clone(), spec.logs.clone());
             tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
@@ -140,17 +158,17 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
                         pool.slots[i].store(p.trim().parse().unwrap_or(0), Ordering::Release);
                         pool.ready.notify_waiters();
                     } else {
-                        println!("[{tag}] {line}");
+                        logs.push("console", &line, true);
                     }
                 }
             });
         }
         if let Some(err) = child.stderr.take() {
-            let tag = tag.clone();
+            let logs = spec.logs.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(err).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    eprintln!("[{tag}] {line}");
+                    logs.push("error", &line, true);
                 }
             });
         }
@@ -169,7 +187,13 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
                 let _ = child.kill().await;
                 true
             }
+            _ = pool.stop.cancelled() => {
+                pool.slots[i].store(0, Ordering::Release);
+                let _ = child.kill().await;
+                return;
+            }
         };
+        pool.restarts.fetch_add(1, Ordering::Relaxed);
         pool.slots[i].store(0, Ordering::Release);
         drop(stdin);
         if restarted || started.elapsed() > Duration::from_secs(10) {

@@ -19,7 +19,13 @@ pub fn is_upgrade(headers: &HeaderMap) -> bool {
 }
 
 /// 把 upgrade 請求轉給 127.0.0.1:port。headers 是已經整理好（含內部標頭）的請求標頭。
-pub async fn tunnel(mut req: Request, port: u16, path: &str, headers: &HeaderMap) -> Result<Response<Body>> {
+pub async fn tunnel(
+    mut req: Request,
+    port: u16,
+    path: &str,
+    headers: &HeaderMap,
+    gauge: Option<std::sync::Arc<crate::observe::Metrics>>,
+) -> Result<Response<Body>> {
     let upgrade = req.headers().get(header::UPGRADE).cloned();
     let on_upgrade = hyper::upgrade::on(&mut req);
 
@@ -116,7 +122,13 @@ pub async fn tunnel(mut req: Request, port: u16, path: &str, headers: &HeaderMap
         if !rest.is_empty() && client.write_all(&rest).await.is_err() {
             return;
         }
+        if let Some(g) = &gauge {
+            g.websockets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         let _ = tokio::io::copy_bidirectional(&mut client, &mut stream).await;
+        if let Some(g) = &gauge {
+            g.websockets.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
     });
     Ok(builder.body(Body::empty())?)
 }

@@ -33,6 +33,8 @@ pub struct App {
     pub dev: bool,
     pub http: reqwest::Client,
     pub token: String,
+    pub metrics: Arc<crate::observe::Metrics>,
+    pub logs: Arc<crate::observe::Logs>,
 }
 
 /// 建立應用時需要的共用資訊
@@ -113,6 +115,7 @@ impl App {
             "doSqliteDir": state.join("do-sqlite"),
             "rules": cfg.rules,
         });
+        let logs = Arc::new(crate::observe::Logs::new(&name, entry.log_files.then(|| state.join("logs"))));
         let mut node_args = Vec::new();
         if entry.sandbox {
             // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
@@ -148,6 +151,7 @@ impl App {
                     max_block,
                     http: ctx.http.clone(),
                     token: token.clone(),
+                    logs: logs.clone(),
                 },
                 entry.instances,
             )
@@ -175,6 +179,8 @@ impl App {
             dev: ctx.dev,
             http: ctx.http.clone(),
             token,
+            metrics: Arc::default(),
+            logs,
         }))
     }
 

@@ -1,0 +1,2 @@
+// 優雅關閉的測試：/slow 要 1.5 秒才回應
+{ "name": "slow", "main": "src/worker.js" }

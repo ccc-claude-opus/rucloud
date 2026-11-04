@@ -420,3 +420,51 @@ pub fn migrate_all(dir: &Path, cfg: &Wrangler, d1: &std::collections::HashMap<St
     }
     Ok(())
 }
+
+// ---------- tail ----------
+
+/// 連到管理埠的 SSE，把 log 一行一行印出來
+pub async fn tail(admin: &str, app: &str, token: Option<&str>, n: usize, kind: Option<&str>, raw: bool) -> Result<()> {
+    use futures_util::StreamExt;
+    let url = format!("{}/apps/{}/tail?n={n}", admin.trim_end_matches('/'), urlencoding::encode(app));
+    let mut req = reqwest::Client::new().get(&url);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
+    let res = req
+        .send()
+        .await
+        .with_context(|| format!("連不到 {admin}（rucloud 有開管理埠嗎？）"))?;
+    if !res.status().is_success() {
+        bail!("{}：{}", res.status(), res.text().await.unwrap_or_default().trim());
+    }
+    let mut stream = res.bytes_stream();
+    let mut buf = String::new();
+    while let Some(chunk) = stream.next().await {
+        buf.push_str(&String::from_utf8_lossy(&chunk?));
+        while let Some(i) = buf.find("\n\n") {
+            let event: String = buf.drain(..i + 2).collect();
+            for line in event.lines() {
+                let Some(data) = line.strip_prefix("data:") else { continue };
+                let Ok(v) = serde_json::from_str::<Value>(data.trim()) else {
+                    continue;
+                };
+                if kind.is_some_and(|k| v["kind"] != k) {
+                    continue;
+                }
+                if raw {
+                    println!("{v}");
+                } else {
+                    let ts = v["ts"].as_str().unwrap_or("");
+                    println!(
+                        "{} [{}] {}",
+                        ts.get(11..23).unwrap_or(ts),
+                        v["kind"].as_str().unwrap_or(""),
+                        v["message"].as_str().unwrap_or("")
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}

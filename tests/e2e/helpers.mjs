@@ -46,6 +46,8 @@ export async function start({ args, toml, ready, env = {} }) {
   }
   return {
     dir,
+    child,
+    exited,
     state: join(dir, 'state'),
     log: () => log,
     async stop() {

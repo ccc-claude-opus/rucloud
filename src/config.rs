@@ -262,8 +262,30 @@ pub struct ServeConfig {
     pub ai_gateway: Option<crate::ai_gateway::GatewayCfg>,
     /// R2 的 S3 相容 API
     pub s3: Option<crate::s3::S3Cfg>,
+    /// 管理埠：/health、/metrics、log
+    pub admin: Option<AdminCfg>,
+    /// 收到 SIGTERM 後最多等幾秒讓進行中的請求做完
+    #[serde(default = "thirty")]
+    pub shutdown_timeout: u64,
     #[serde(default, rename = "app")]
     pub apps: Vec<AppEntry>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AdminCfg {
+    pub port: u16,
+    /// 預設只聽 127.0.0.1
+    #[serde(default = "localhost")]
+    pub bind: String,
+    /// 有設定時 /apps/* 需要帶 token（Authorization: Bearer 或 ?token=）
+    pub token: Option<String>,
+}
+
+fn localhost() -> String {
+    "127.0.0.1".into()
+}
+fn thirty() -> u64 {
+    30
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -305,6 +327,9 @@ pub struct AppEntry {
     pub memory_mb: Option<u32>,
     /// 事件迴圈卡住超過幾毫秒就重開程序；0 = 不檢查。預設 30000
     pub max_block_ms: Option<u64>,
+    /// Worker 的 log 每天寫一個檔（<state>/<應用>/logs/）
+    #[serde(default = "yes")]
+    pub log_files: bool,
 }
 
 fn default_state() -> PathBuf {
