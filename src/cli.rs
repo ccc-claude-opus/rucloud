@@ -667,3 +667,12 @@ pub fn restore(archive: &Path, state: &Path, force: bool) -> Result<()> {
     println!("已還原 {n} 個項目到 {}", state.display());
     Ok(())
 }
+
+pub async fn purge(app: &str, prefix: Option<&str>, admin: &AdminRef) -> Result<()> {
+    let q = prefix.map(|p| format!("?prefix={}", urlencoding::encode(p))).unwrap_or_default();
+    let v = admin
+        .send(admin.req(reqwest::Method::POST, &format!("/apps/{}/cache/purge{q}", urlencoding::encode(app))))
+        .await?;
+    println!("清掉 {} 筆", v["purged"]);
+    Ok(())
+}

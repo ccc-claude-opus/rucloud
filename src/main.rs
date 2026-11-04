@@ -8,6 +8,7 @@ mod ai_gateway;
 mod app;
 mod assets;
 mod bindings;
+mod cache;
 mod cli;
 mod config;
 mod d1;
@@ -21,6 +22,7 @@ mod queues;
 mod r2;
 mod s3;
 mod server;
+mod tls;
 mod vectorize;
 mod ws;
 
@@ -77,6 +79,17 @@ enum Cmd {
         /// 事件迴圈卡住超過幾毫秒就重開程序（0 = 不檢查）
         #[arg(long, default_value_t = 30_000)]
         max_block_ms: u64,
+        /// 閘道快取 Worker 回應的容量（MB），依 Cache-Control
+        #[arg(long)]
+        cache_mb: Option<usize>,
+        /// HTTPS 憑證（PEM）
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        /// HTTPS 私鑰（PEM）
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
+        #[arg(long, default_value_t = 8443)]
+        tls_port: u16,
         /// 開管理埠（/health、/metrics、log；只聽 127.0.0.1）
         #[arg(long)]
         admin_port: Option<u16>,
@@ -160,6 +173,14 @@ enum Cmd {
         #[command(flatten)]
         admin: cli::AdminRef,
     },
+    /// 清閘道快取（--prefix 是「主機 + 路徑」的開頭，例如 example.com/blog/）
+    Purge {
+        app: String,
+        #[arg(long)]
+        prefix: Option<String>,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
     /// 備份整個資料夾（D1、KV、R2、Durable Objects、佇列、部署的版本）；執行中也可以
     Backup {
         #[arg(long, default_value = ".rucloud")]
@@ -216,6 +237,10 @@ async fn main() -> Result<()> {
             env,
             d1_migrate,
             admin_port,
+            cache_mb,
+            tls_cert,
+            tls_key,
+            tls_port,
         } => {
             let s3 = match s3_port {
                 Some(port) => Some(s3::S3Cfg {
@@ -244,6 +269,18 @@ async fn main() -> Result<()> {
                     token: None,
                 }),
                 shutdown_timeout: 10,
+                compression: true,
+                tls: match (tls_cert, tls_key) {
+                    (Some(cert), Some(key)) => Some(tls::TlsCfg {
+                        port: tls_port,
+                        cert: Some(cert),
+                        key: Some(key),
+                        acme: None,
+                        redirect_http: false,
+                    }),
+                    (None, None) => None,
+                    _ => anyhow::bail!("--tls-cert 和 --tls-key 要一起給"),
+                },
                 apps: vec![AppEntry {
                     path: app,
                     name: None,
@@ -262,6 +299,7 @@ async fn main() -> Result<()> {
                     max_block_ms: Some(max_block_ms),
                     log_files: true,
                     do_idle_ms: None,
+                    cache_mb,
                 }],
             };
             server::run(cfg, true).await
@@ -269,6 +307,7 @@ async fn main() -> Result<()> {
         Cmd::Serve { config } => server::run(config::load_serve_config(&config)?, false).await,
         Cmd::D1 { cmd } => cli::d1(cmd),
         Cmd::Kv { cmd } => cli::kv(cmd),
+        Cmd::Purge { app, prefix, admin } => cli::purge(&app, prefix.as_deref(), &admin).await,
         Cmd::Backup { state, out, with_logs } => cli::backup(&state, &out, with_logs),
         Cmd::Restore { archive, state, force } => cli::restore(&archive, &state, force),
         Cmd::Deploy {

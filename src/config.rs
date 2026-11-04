@@ -264,6 +264,11 @@ pub struct ServeConfig {
     pub s3: Option<crate::s3::S3Cfg>,
     /// 管理埠：/health、/metrics、log
     pub admin: Option<AdminCfg>,
+    /// HTTPS（自備憑證或 ACME）
+    pub tls: Option<crate::tls::TlsCfg>,
+    /// 回應壓縮（gzip、brotli）
+    #[serde(default = "yes")]
+    pub compression: bool,
     /// 收到 SIGTERM 後最多等幾秒讓進行中的請求做完
     #[serde(default = "thirty")]
     pub shutdown_timeout: u64,
@@ -327,6 +332,8 @@ pub struct AppEntry {
     pub memory_mb: Option<u32>,
     /// 事件迴圈卡住超過幾毫秒就重開程序；0 = 不檢查。預設 30000
     pub max_block_ms: Option<u64>,
+    /// 閘道快取 Worker 回應的容量（MB），依 Cache-Control；不設 = 不快取
+    pub cache_mb: Option<usize>,
     /// Durable Object 閒置多久（毫秒）就從記憶體移除；0 = 不移除。預設 60000
     pub do_idle_ms: Option<u64>,
     /// Worker 的 log 每天寫一個檔（<state>/<應用>/logs/）

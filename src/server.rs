@@ -94,7 +94,10 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
                 .with_context(|| format!("無法監聽 {addr}"))?;
-            let router = Router::new().fallback(any(gateway::app_handler)).with_state(slot.clone());
+            let router = compressed(
+                Router::new().fallback(any(gateway::app_handler)).with_state(slot.clone()),
+                cfg.compression,
+            );
             serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
             let shown = if cfg.bind == "0.0.0.0" {
                 "localhost".to_string()
@@ -105,14 +108,30 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         }
         crate::deploy::restart_background(slot, &app, &queues);
     }
+    let edge_router = compressed(
+        Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes)),
+        cfg.compression,
+    );
+    if let Some(tls_cfg) = cfg.tls.clone() {
+        servers.push(crate::tls::serve(tls_cfg, &cfg.bind, &state_root, edge_router.clone(), shutdown.clone()).await?);
+    }
     if let Some(edge) = &cfg.edge {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, edge.port).parse()?;
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("無法監聽 {addr}"))?;
-        let router = Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes));
-        serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
-        tracing::info!("edge：http://<應用名稱>.localhost:{}（依 Host 分派）", edge.port);
+        match cfg.tls.as_ref().filter(|t| t.redirect_http) {
+            Some(t) => {
+                let port = t.port;
+                let router = Router::new().fallback(any(move |req: axum::extract::Request| to_https(req, port)));
+                serve!(listener, router.into_make_service_with_connect_info::<SocketAddr>());
+                tracing::info!("edge：http://…:{} 全部轉址到 HTTPS", edge.port);
+            }
+            None => {
+                serve!(listener, edge_router.into_make_service_with_connect_info::<SocketAddr>());
+                tracing::info!("edge：http://<應用名稱>.localhost:{}（依 Host 分派）", edge.port);
+            }
+        }
     }
     if let Some(gw_cfg) = cfg.ai_gateway.clone() {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, gw_cfg.port).parse()?;
@@ -178,6 +197,40 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     tokio::time::sleep(Duration::from_millis(200)).await;
     tracing::info!("已結束");
     Ok(())
+}
+
+/// 回應壓縮（gzip、brotli）。101（WebSocket）、SSE、圖片等不壓
+fn compressed(r: Router, on: bool) -> Router {
+    if !on {
+        return r;
+    }
+    use tower_http::compression::predicate::{DefaultPredicate, Predicate};
+    let not_upgrade = |status: axum::http::StatusCode, _: axum::http::Version, _: &axum::http::HeaderMap, _: &axum::http::Extensions| {
+        status != axum::http::StatusCode::SWITCHING_PROTOCOLS
+    };
+    r.layer(tower_http::compression::CompressionLayer::new().compress_when(DefaultPredicate::new().and(not_upgrade)))
+}
+
+/// HTTP → HTTPS 轉址（308 保留方法與內容）
+async fn to_https(req: axum::extract::Request, port: u16) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let host = host
+        .rsplit_once(':')
+        .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+        .map(|(h, _)| h)
+        .unwrap_or(host);
+    let port = if port == 443 { String::new() } else { format!(":{port}") };
+    let pq = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
+    (
+        axum::http::StatusCode::PERMANENT_REDIRECT,
+        [(axum::http::header::LOCATION, format!("https://{host}{port}{pq}"))],
+    )
+        .into_response()
 }
 
 async fn wait_for_signal() {

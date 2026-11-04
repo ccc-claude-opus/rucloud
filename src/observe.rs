@@ -90,6 +90,12 @@ pub const METRIC_HELP: &str = "\
 # TYPE rucloud_worker_restarts_total counter
 # HELP rucloud_binding_calls_total Worker 呼叫綁定的次數
 # TYPE rucloud_binding_calls_total counter
+# HELP rucloud_cache_hits_total 閘道快取命中次數
+# TYPE rucloud_cache_hits_total counter
+# HELP rucloud_cache_misses_total 閘道快取沒命中的次數
+# TYPE rucloud_cache_misses_total counter
+# HELP rucloud_cache_bytes 快取使用的記憶體
+# TYPE rucloud_cache_bytes gauge
 ";
 
 const RING: usize = 1000;

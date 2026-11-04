@@ -1,6 +1,6 @@
 [package]
 name = "rucloud"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A self-hostable Cloudflare-Workers-like platform: Rust edge gateway + D1/KV/R2/Queues/Cron/Durable Objects/Vectorize/AI Gateway bindings, running Worker code on Node.js"
@@ -29,12 +29,15 @@ flate2 = "1"
 hex = "0.4"
 hmac = "0.12"
 hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "server-graceful", "service"] }
 json5 = "0.4"
 md-5 = "0.10"
 mime_guess = "2"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json", "http2"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rustls-acme = { version = "0.15", default-features = false, features = ["ring", "tokio", "tls12", "webpki-roots"] }
+rustls-pemfile = "2"
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -42,7 +45,9 @@ sha2 = "0.10"
 tar = "0.4"
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 toml = "0.9"
+tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2"

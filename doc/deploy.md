@@ -52,6 +52,16 @@ token = "換成很長的亂數"           # 可省略；設定後 /apps/* 需要
 
 shutdown_timeout = 30            # 收到 SIGTERM 後最多等幾秒讓請求做完
 
+# HTTPS（可省略）：和 edge 一樣依 Host 分派，應用要設定 hosts
+[tls]
+port = 443
+acme = { domains = ["shop.example.com"], email = ["me@example.com"] }   # Let's Encrypt 自動申請、續期
+# cert = "/etc/rucloud/cert.pem"   # 或自備憑證（和 acme 二選一）
+# key = "/etc/rucloud/key.pem"
+redirect_http = true             # edge 的 HTTP 埠全部轉址到 HTTPS
+
+compression = true               # gzip / brotli（預設開）
+
 # R2 的 S3 相容 API（可省略）
 [s3]
 port = 8780
@@ -75,9 +85,10 @@ allow_write = []
 memory_mb = 256                  # 每個 Worker 程序的 JS heap 上限
 max_block_ms = 30000             # 事件迴圈卡住多久就重開程序（0 = 不檢查）
 do_idle_ms = 60000               # Durable Object 閒置多久就從記憶體移除（0 = 不移除）
+cache_mb = 64                    # 閘道依 Cache-Control 快取 Worker 回應（不設 = 不快取）
 ```
 
-TLS 建議交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）。rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。
+HTTPS 可以由 rucloud 自己處理（`[tls]`，ACME 需要 443 埠對外），也可以交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）；用反向代理時 rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。
 
 ### 監控
 

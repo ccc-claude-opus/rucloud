@@ -60,6 +60,7 @@ flowchart LR
 | Service bindings（`env.OTHER.fetch`） | `services` | ✓ |
 | Workers AI（`env.AI.run`） | `ai` | ✓ 轉給 OpenAI 相容後端 |
 | AI Gateway（log、快取、限流、重試） | `rucloud.toml` 的 `[ai_gateway]` | ✓ |
+| HTTPS（自備憑證、ACME 自動申請）、gzip / brotli、回應快取 | `rucloud.toml` 的 `[tls]`、`cache_mb` | ✓ |
 | `import … from 'cloudflare:workers'`、`caches.default` | — | ✓ |
 | `HTMLRewriter` | — | ✓ 子集（不串流） |
 

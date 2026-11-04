@@ -1,5 +1,13 @@
 # 更新紀錄
 
+## 0.11.0 — HTTPS、快取、壓縮
+
+* **HTTPS**（`[tls]`）：自備憑證（`cert` + `key`，PEM），或 ACME 自動申請與續期（`acme = { domains = [...], email = [...] }`，Let's Encrypt，TLS-ALPN-01 驗證，只需要 443 埠）。和 edge 一樣依 Host 分派，支援 HTTP/2；Worker 看到的 `request.url` 是 `https://`。`redirect_http = true` 讓 edge 的 HTTP 埠全部 308 轉址到 HTTPS。開發時可以用 `rucloud dev --tls-cert --tls-key`。
+* **閘道快取**（應用設定 `cache_mb`，預設關）：依 `Cache-Control`（`s-maxage` / `max-age`）快取 Worker 的回應；`private` / `no-store` / `Set-Cookie` / `Vary`（Accept-Encoding 以外）不快取；帶 `Authorization` 的請求不走快取；回應標頭 `cf-cache-status: HIT | MISS | BYPASS`。部署新版本時自動清空；`rucloud purge <應用> [--prefix 主機/路徑]` 手動清。
+* **Cache API 跨程序共用**：`caches.default`、`caches.open()` 改存在 rucloud 裡，多個 Worker 程序看到同一份。
+* **壓縮**：gzip / brotli（依 `Accept-Encoding`），靜態檔案與 Worker 回應都適用；SSE、圖片、WebSocket 不壓。`compression = false` 關閉。
+* metrics 新增 `rucloud_cache_hits_total`、`rucloud_cache_misses_total`、`rucloud_cache_bytes`。
+
 ## 0.10.0 — 部署、版本與備份
 
 * **部署**：`rucloud deploy [資料夾] --admin <管理埠>` 把應用打包（不含 `.dev.vars`、`.env` 等密鑰檔與 `.git`）上傳成新版本並啟用。

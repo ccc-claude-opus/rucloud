@@ -44,6 +44,7 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/apps/{app}/versions/{id}/activate", post(activate))
         .route("/apps/{app}/rollback", post(rollback))
         .route("/apps/{app}/reload", post(reload))
+        .route("/apps/{app}/cache/purge", post(purge))
         .layer(axum::extract::DefaultBodyLimit::max(crate::deploy::MAX_UPLOAD))
         .layer(middleware::from_fn_with_state(admin.clone(), auth));
     Router::new()
@@ -95,6 +96,22 @@ async fn metrics(State(admin): S) -> Response {
         slot.shared
             .metrics
             .render(name, a.pool.as_ref().map(|p| p.restarts()).unwrap_or(0), &mut out);
+        let c = &slot.shared.cache;
+        if let Some(e) = &c.edge {
+            out.push_str(&format!(
+                "rucloud_cache_hits_total{{app=\"{name}\"}} {}\n",
+                c.hits.load(Ordering::Relaxed)
+            ));
+            out.push_str(&format!(
+                "rucloud_cache_misses_total{{app=\"{name}\"}} {}\n",
+                c.misses.load(Ordering::Relaxed)
+            ));
+            out.push_str(&format!("rucloud_cache_bytes{{app=\"{name}\",cache=\"edge\"}} {}\n", e.stats().1));
+        }
+        out.push_str(&format!(
+            "rucloud_cache_bytes{{app=\"{name}\",cache=\"api\"}} {}\n",
+            c.api.stats().1
+        ));
     }
     out.push_str("# HELP rucloud_queue_messages 佇列裡的訊息數\n# TYPE rucloud_queue_messages gauge\n");
     let q = admin.queues.clone();
@@ -221,4 +238,22 @@ async fn reload(State(admin): S, Path(app): Path<String>) -> Response {
         Ok(()) => axum::Json(json!({ "reloaded": app })).into_response(),
         Err(e) => fail(e),
     }
+}
+
+#[derive(Deserialize)]
+struct PurgeQuery {
+    prefix: Option<String>,
+}
+
+/// 清閘道快取：prefix 是「主機 + 路徑」的開頭，例如 example.com/blog/；不給就全部清
+async fn purge(State(admin): S, Path(app): Path<String>, Query(q): Query<PurgeQuery>) -> Response {
+    let Some(slot) = admin.apps.get(&app) else { return not_found(&app) };
+    let n = slot
+        .shared
+        .cache
+        .edge
+        .as_ref()
+        .map(|e| e.purge(q.prefix.as_deref().unwrap_or("")))
+        .unwrap_or(0);
+    axum::Json(json!({ "purged": n })).into_response()
 }

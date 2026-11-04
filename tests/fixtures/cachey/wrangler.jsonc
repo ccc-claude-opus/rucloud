@@ -1,0 +1,2 @@
+// 快取、壓縮、HTTPS 的測試
+{ "name": "cachey", "main": "src/worker.js", "assets": { "directory": "./public", "run_worker_first": ["/w/*"] } }

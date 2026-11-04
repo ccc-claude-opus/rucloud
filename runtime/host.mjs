@@ -1152,27 +1152,40 @@ function buildEnv() {
 
 // ---------- 全域：Cache API、scheduler、Service Worker 語法 ----------
 
-class MemoryCache {
-  #m = new Map();
-  #key(req) { return typeof req === 'string' ? req : req.url; }
-  async match(req) {
-    const e = this.#m.get(this.#key(req));
-    if (!e) return undefined;
-    if (e.exp < Date.now()) { this.#m.delete(this.#key(req)); return undefined; }
-    return new Response(e.body, { status: e.status, headers: e.headers });
+// Cache API：存在 rucloud（Rust）裡，所有 Worker 程序共用
+class RemoteCache {
+  constructor(name) { this.base = `${B}/cache/${enc(name)}`; }
+  #url(req) { return typeof req === 'string' ? new URL(req).href : req.url; }
+  async match(req, options = {}) {
+    if (typeof req !== 'string' && req.method !== 'GET' && !options.ignoreMethod) return undefined;
+    const res = await nativeFetch(`${this.base}?url=${enc(this.#url(req))}`, { headers: AUTH });
+    if (res.status === 404) { await res.body?.cancel(); return undefined; }
+    if (!res.ok) await readJson(res);
+    const meta = JSON.parse(decodeURIComponent(res.headers.get('x-cache-meta')));
+    const headers = new Headers(meta.headers);
+    headers.set('age', res.headers.get('x-cache-age') || '0');
+    headers.set('cf-cache-status', 'HIT');
+    const nobody = [101, 204, 205, 304].includes(meta.status);
+    return new Response(nobody ? null : res.body, { status: meta.status, headers });
   }
-  async put(req, res) {
-    const cc = res.headers.get('cache-control') || '';
-    const m = /s-maxage=(\d+)/.exec(cc) || /max-age=(\d+)/.exec(cc);
-    if (!m || /no-store|private/.test(cc) || res.status === 206) return;
-    this.#m.set(this.#key(req), { body: await res.arrayBuffer(), status: res.status, headers: [...res.headers], exp: Date.now() + Number(m[1]) * 1000 });
+  async put(req, response) {
+    if (typeof req !== 'string' && req.method !== 'GET') throw new TypeError('Cannot cache response to non-GET request.');
+    if (response.status === 206) throw new TypeError('Cannot cache response to a range request (206 Partial Content).');
+    if ((response.headers.get('vary') || '').includes('*')) throw new TypeError("Cannot cache response with 'Vary: *' header.");
+    const body = await response.arrayBuffer();
+    const meta = enc(JSON.stringify({ status: response.status, headers: [...response.headers] }));
+    const res = await nativeFetch(`${this.base}?url=${enc(this.#url(req))}`, { method: 'PUT', headers: { ...AUTH, 'x-cache-meta': meta }, body });
+    await readJson(res);
   }
-  async delete(req) { return this.#m.delete(this.#key(req)); }
+  async delete(req) {
+    const res = await nativeFetch(`${this.base}?url=${enc(this.#url(req))}`, { method: 'DELETE', headers: AUTH });
+    return (await readJson(res)).deleted;
+  }
 }
 const namedCaches = new Map();
 globalThis.caches = {
-  default: new MemoryCache(),
-  async open(name) { if (!namedCaches.has(name)) namedCaches.set(name, new MemoryCache()); return namedCaches.get(name); },
+  default: new RemoteCache('default'),
+  async open(name) { if (!namedCaches.has(name)) namedCaches.set(name, new RemoteCache(`named:${name}`)); return namedCaches.get(name); },
 };
 globalThis.HTMLRewriter = HTMLRewriter;
 globalThis.scheduler ??= { wait: (ms) => new Promise((r) => setTimeout(r, ms)) };

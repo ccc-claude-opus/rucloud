@@ -10,7 +10,7 @@
 | 全域 API | Node.js 24 原生的 `fetch`、`Request`、`Response`、`Headers`、`URL`、Web Streams、`crypto.subtle`、`TextEncoder`… |
 | `request.cf` | 固定的假值（`colo: "LOCAL"`）；有 `CF-IPCountry` 標頭時 `country` 取自它 |
 | `ctx.waitUntil` | ✓（不阻擋回應） |
-| `caches.default` / `caches.open` | 程序內記憶體快取，依 `Cache-Control: max-age / s-maxage` |
+| `caches.default` / `caches.open` | 存在 rucloud 的記憶體，所有 Worker 程序共用；依 `Cache-Control: max-age / s-maxage`，沒有就不存 |
 | `cloudflare:workers` | `DurableObject`、`WorkerEntrypoint`、`WorkflowEntrypoint`、`RpcTarget`、`env`、`waitUntil` |
 | `node:*` 模組 | 都能用（等同永遠開著 `nodejs_compat`） |
 | TypeScript `main` | Node 24 的型別轉換（`--experimental-transform-types`，enum、namespace 也可以）；不讀 `tsconfig.json` 的 `paths` |

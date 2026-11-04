@@ -79,6 +79,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/vectorize/{binding}/{op}", post(vectorize))
         .route("/b/{app}/ai/run", post(ai_run))
         .route("/b/{app}/assets", any(assets))
+        .route("/b/{app}/cache/{name}", get(cache_get).put(cache_put).delete(cache_delete))
         .route("/b/{app}/service/{binding}", any(service))
         .layer(middleware::from_fn_with_state(hub.clone(), auth))
         .layer(DefaultBodyLimit::disable())
@@ -448,6 +449,80 @@ async fn ai_run(State(hub): S, Path(app): Path<String>, Json(body): Json<Value>)
     Ok(Json(
         crate::ai::run(&app.http, body["model"].as_str().unwrap_or(""), &body["inputs"]).await?,
     ))
+}
+
+// ---------- Cache API（caches.default / caches.open），所有 Worker 程序共用 ----------
+
+#[derive(Deserialize)]
+struct CacheQuery {
+    url: String,
+}
+
+fn cache_key(name: &str, url: &str) -> String {
+    format!("{name}\u{0}{url}")
+}
+
+async fn cache_get(State(hub): S, Path((app, name)): Path<(String, String)>, Query(q): Query<CacheQuery>) -> R<Response> {
+    let app = hub.app(&app)?;
+    let Some((e, age)) = app.cache.api.get(&cache_key(&name, &q.url)) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let meta = json!({ "status": e.status, "headers": e.headers });
+    let mut h = HeaderMap::new();
+    h.insert(
+        "x-cache-meta",
+        HeaderValue::from_str(&urlencoding::encode(&meta.to_string())).unwrap(),
+    );
+    h.insert("x-cache-age", HeaderValue::from(age));
+    Ok((h, e.body).into_response())
+}
+
+async fn cache_put(
+    State(hub): S,
+    Path((app, name)): Path<(String, String)>,
+    Query(q): Query<CacheQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    let meta: Value = headers
+        .get("x-cache-meta")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| urlencoding::decode(v).ok().and_then(|s| serde_json::from_str(&s).ok()))
+        .ok_or_else(|| anyhow!("缺少 x-cache-meta"))?;
+    let status = StatusCode::from_u16(meta["status"].as_u64().unwrap_or(200) as u16).map_err(|e| anyhow!(e))?;
+    let pairs: Vec<(String, String)> = meta["headers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p[0].as_str()?.to_string(), p[1].as_str()?.to_string())))
+        .collect();
+    let mut hm = HeaderMap::new();
+    for (k, v) in &pairs {
+        if let (Ok(k), Ok(v)) = (axum::http::HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
+            hm.append(k, v);
+        }
+    }
+    // Cache API 只看 Cache-Control 決定存多久（和 Cloudflare 一樣，沒有就不存）
+    let stored = match crate::cache::ttl_of(status, &hm) {
+        Some(ttl) => {
+            app.cache.api.put(
+                cache_key(&name, &q.url),
+                status.as_u16(),
+                crate::cache::keep_headers(&hm),
+                body,
+                ttl,
+            );
+            true
+        }
+        None => false,
+    };
+    Ok(Json(json!({ "stored": stored })))
+}
+
+async fn cache_delete(State(hub): S, Path((app, name)): Path<(String, String)>, Query(q): Query<CacheQuery>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    Ok(Json(json!({ "deleted": app.cache.api.delete(&cache_key(&name, &q.url)) })))
 }
 
 // ---------- Assets、Service bindings ----------

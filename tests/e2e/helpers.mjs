@@ -19,7 +19,7 @@ export function freePort() {
 async function waitFor(url, ms = 20000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
-    try { await fetch(url); return; } catch { await new Promise((r) => setTimeout(r, 100)); }
+    try { await fetch(url, { redirect: 'manual' }); return; } catch { await new Promise((r) => setTimeout(r, 100)); }
   }
   throw new Error(`等不到 ${url}`);
 }

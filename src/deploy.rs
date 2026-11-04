@@ -168,6 +168,7 @@ impl Deployer {
             }
         }
         let old = slot.set(new.clone());
+        slot.shared.cache.clear_edge();
         restart_background(&slot, &new, &self.queues);
         let mut m = manifest(&self.ctx, app);
         m.current = id.map(String::from);

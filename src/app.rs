@@ -35,6 +35,7 @@ pub struct App {
     pub token: String,
     pub metrics: Arc<crate::observe::Metrics>,
     pub logs: Arc<crate::observe::Logs>,
+    pub cache: Arc<crate::cache::Caches>,
 }
 
 /// 建立應用時需要的共用資訊
@@ -50,6 +51,7 @@ pub struct Ctx {
 
 /// 跨版本不變的東西：換版時新舊 Worker 程序會同時存在一下子，token 要相同；計數與 log 也要接續
 pub struct Shared {
+    pub cache: Arc<crate::cache::Caches>,
     pub token: String,
     pub metrics: Arc<crate::observe::Metrics>,
     pub logs: Arc<crate::observe::Logs>,
@@ -96,6 +98,7 @@ impl Slot {
         let name = app_name(entry)?;
         let state = ctx.state_root.join(&name);
         let shared = Shared {
+            cache: Arc::new(crate::cache::Caches::new(entry.cache_mb)),
             // 每個應用一把自己的 token：Worker 只能用它存取自己的綁定
             token: format!("{:032x}", rand::random::<u128>()),
             metrics: Arc::default(),
@@ -243,6 +246,7 @@ impl App {
             token,
             metrics: shared.metrics.clone(),
             logs,
+            cache: shared.cache.clone(),
         }))
     }
 

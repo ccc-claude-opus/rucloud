@@ -134,10 +134,62 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
     if !req.headers().contains_key("x-forwarded-for") {
         extra.push(("x-forwarded-for", peer.ip().to_string()));
     }
-    match forward(app, None, req, &extra, true).await {
-        Ok(r) => r,
-        Err(e) => (StatusCode::BAD_GATEWAY, format!("rucloud：Worker 沒有回應：{e:#}\n")).into_response(),
+    // 閘道快取（應用設定 cache_mb 才開）：GET、沒有 Authorization、不是 WebSocket
+    let cache_key = app.cache.edge.as_ref().filter(|_| {
+        req.method() == axum::http::Method::GET
+            && !req.headers().contains_key(header::AUTHORIZATION)
+            && !crate::ws::is_upgrade(req.headers())
+    });
+    let key = format!("{host}{}", req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
+    if let Some(store) = cache_key
+        && let Some((e, age)) = store.get(&key)
+    {
+        app.cache.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return crate::cache::response(e, age, "HIT");
     }
+    let resp = match forward(app, None, req, &extra, true).await {
+        Ok(r) => r,
+        Err(e) => return (StatusCode::BAD_GATEWAY, format!("rucloud：Worker 沒有回應：{e:#}\n")).into_response(),
+    };
+    let Some(store) = cache_key else { return resp };
+    app.cache.misses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Some(ttl) = crate::cache::ttl_of(resp.status(), resp.headers()) else {
+        return with_cache_status(resp, "BYPASS");
+    };
+    // 邊讀邊收：超過單筆上限就放棄快取，已讀的部分接回去繼續串流
+    let (parts, body) = resp.into_parts();
+    let limit = store.max_entry();
+    let mut stream = body.into_data_stream();
+    let mut chunks: Vec<bytes::Bytes> = Vec::new();
+    let mut total = 0;
+    use futures_util::StreamExt;
+    while let Some(c) = stream.next().await {
+        let Ok(c) = c else { break };
+        total += c.len();
+        chunks.push(c);
+        if total > limit {
+            let head = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>));
+            let mut r = Response::from_parts(parts, Body::from_stream(head.chain(stream)));
+            r.headers_mut().insert("cf-cache-status", HeaderValue::from_static("BYPASS"));
+            return r;
+        }
+    }
+    let body: bytes::Bytes = chunks.concat().into();
+    store.put(
+        key,
+        parts.status.as_u16(),
+        crate::cache::keep_headers(&parts.headers),
+        body.clone(),
+        ttl,
+    );
+    let mut r = Response::from_parts(parts, Body::from(body));
+    r.headers_mut().insert("cf-cache-status", HeaderValue::from_static("MISS"));
+    r
+}
+
+fn with_cache_status(mut r: Response<Body>, s: &'static str) -> Response<Body> {
+    r.headers_mut().insert("cf-cache-status", HeaderValue::from_static(s));
+    r
 }
 
 /// 把請求轉給某個 Worker 程序。外來的 x-rucloud-* 標頭一律拿掉，避免偽造內部呼叫。
