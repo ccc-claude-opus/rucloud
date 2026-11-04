@@ -54,6 +54,15 @@ export default {
       return new Response(obj.body, { headers });
     }
 
+    if (p === '/api/r2-multipart') {
+      const up = await env.FILES.createMultipartUpload('big.bin', { httpMetadata: { contentType: 'application/octet-stream' } });
+      const part = new Uint8Array(5 * 1024 * 1024).fill(7);
+      const p1 = await up.uploadPart(1, part);
+      const p2 = await up.uploadPart(2, 'tail');
+      const obj = await up.complete([p1, p2]);
+      return json({ key: obj.key, size: obj.size, etag: obj.etag });
+    }
+
     if (p === '/api/queue') {
       await env.JOBS.send({ task: 'thumbnail', at: new Date() });
       return json({ queued: true, done: Number((await env.KV.get('jobs-done')) || 0) });

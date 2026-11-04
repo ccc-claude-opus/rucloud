@@ -15,6 +15,7 @@ mod kv;
 mod pool;
 mod queues;
 mod r2;
+mod s3;
 mod server;
 mod vectorize;
 mod ws;
@@ -57,6 +58,9 @@ enum Cmd {
         no_watch: bool,
         #[arg(long, default_value = "node")]
         node: String,
+        /// 開 R2 的 S3 相容 API（金鑰取自 RUCLOUD_S3_ACCESS_KEY_ID / RUCLOUD_S3_SECRET_ACCESS_KEY）
+        #[arg(long)]
+        s3_port: Option<u16>,
     },
     /// 依 rucloud.toml 同時跑多個應用（正式部署用）
     Serve {
@@ -104,7 +108,16 @@ async fn main() -> Result<()> {
         .with_target(false)
         .init();
     match Cli::parse().cmd {
-        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node } => {
+        Cmd::Dev { app, port, ip, instances, state, d1_init, no_watch, node, s3_port } => {
+            let s3 = match s3_port {
+                Some(port) => Some(s3::S3Cfg {
+                    port,
+                    access_key_id: std::env::var("RUCLOUD_S3_ACCESS_KEY_ID").context("--s3-port 需要環境變數 RUCLOUD_S3_ACCESS_KEY_ID")?,
+                    secret_access_key: std::env::var("RUCLOUD_S3_SECRET_ACCESS_KEY")
+                        .context("--s3-port 需要環境變數 RUCLOUD_S3_SECRET_ACCESS_KEY")?,
+                }),
+                None => None,
+            };
             let mut init = BTreeMap::new();
             for s in d1_init {
                 let (b, f) = s.split_once('=').context("--d1-init 的格式是 BINDING=FILE")?;
@@ -116,6 +129,7 @@ async fn main() -> Result<()> {
                 bind: ip,
                 edge: None,
                 ai_gateway: None,
+                s3,
                 apps: vec![AppEntry {
                     path: app,
                     name: None,

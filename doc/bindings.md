@@ -63,7 +63,34 @@ return new Response(null, { status: 101, webSocket: client });
 
 `head`、`get(key, {range, onlyIf})`、`put(key, value, {httpMetadata, customMetadata})`（value 可以是字串、`ArrayBuffer`、`Blob`、`ReadableStream`，串流寫入不佔記憶體）、`delete(key | keys)`、`list({prefix, limit, cursor, delimiter})`。`R2Object` 有 `writeHttpMetadata()`、`httpEtag`、`checksums.md5`。
 
-不支援：multipart upload、條件式 put、`include` 選項（中繼資料一律回傳）。
+Multipart：`createMultipartUpload(key, {httpMetadata, customMetadata})` → `uploadPart(n, value)`（回傳 `{partNumber, etag}`）→ `complete(parts)`；也有 `resumeMultipartUpload(key, uploadId)` 與 `abort()`。
+
+不支援：條件式 put、`include` 選項（中繼資料一律回傳）、`ssecKey`。
+
+### S3 相容 API
+
+```toml
+# rucloud.toml
+[s3]
+port = 8780
+access_key_id = "…"
+secret_access_key = "…"
+```
+
+開發模式：`RUCLOUD_S3_ACCESS_KEY_ID=… RUCLOUD_S3_SECRET_ACCESS_KEY=… rucloud dev --s3-port 8780`。
+
+```bash
+aws --endpoint-url http://localhost:8780 s3 ls s3://my-bucket/
+aws --endpoint-url http://localhost:8780 s3 cp big.iso s3://my-bucket/   # 大檔自動 multipart
+```
+
+| 項目 | 說明 |
+|---|---|
+| bucket | wrangler 設定裡 `r2_buckets[].bucket_name`；不同應用同名時以第一個為準 |
+| 網址 | path-style（`/bucket/key`）；`<bucket>.host` 的虛擬主機風格也接受 |
+| 驗證 | SigV4（標頭或 presigned URL），只接受設定的那一組金鑰；沒有匿名讀取 |
+| 操作 | ListBuckets、ListObjects V1/V2、Get（Range）/Head/Put/Delete/Copy Object、DeleteObjects、multipart、GetBucketLocation |
+| 不支援 | 建立 / 刪除 bucket、versioning、ACL、bucket policy、lifecycle、ListParts / ListMultipartUploads、跨應用的 Copy、aws-chunked 每段簽章的驗證（只驗證整個請求的簽章） |
 
 ## Queues
 

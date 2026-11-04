@@ -38,6 +38,12 @@ rate_limit = { limit = 120, period = 60 }
 [ai_gateway.providers]
 ollama = "http://localhost:11434"
 
+# R2 的 S3 相容 API（可省略）
+[s3]
+port = 8780
+access_key_id = "rucloud"
+secret_access_key = "換成很長的亂數"
+
 [[app]]
 path = "/srv/apps/myshop"        # wrangler 專案資料夾
 name = "myshop"                  # 可省略，預設用 wrangler 的 name

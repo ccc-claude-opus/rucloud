@@ -200,6 +200,8 @@ pub struct ServeConfig {
     /// 依 Host 標頭分派到各應用的共用入口
     pub edge: Option<EdgeCfg>,
     pub ai_gateway: Option<crate::ai_gateway::GatewayCfg>,
+    /// R2 的 S3 相容 API
+    pub s3: Option<crate::s3::S3Cfg>,
     #[serde(default, rename = "app")]
     pub apps: Vec<AppEntry>,
 }

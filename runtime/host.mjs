@@ -582,7 +582,29 @@ class R2Bucket {
     const r = await readJson(await nativeFetch(`${this.base}/list?${q}`, { headers: AUTH }));
     return { ...r, objects: r.objects.map((o) => new R2Object(o)) };
   }
-  createMultipartUpload() { throw new Error('rucloud 的 R2 尚未支援 multipart upload'); }
+  async createMultipartUpload(key, options = {}) {
+    const { uploadId } = await rpc(`${this.base}/mpu/create`, {
+      key, httpMetadata: httpMetadataOf(options.httpMetadata), customMetadata: options.customMetadata || {},
+    });
+    return new R2MultipartUpload(this.base, key, uploadId);
+  }
+  resumeMultipartUpload(key, uploadId) { return new R2MultipartUpload(this.base, key, uploadId); }
+}
+
+class R2MultipartUpload {
+  constructor(base, key, uploadId) { this._base = base; this.key = key; this.uploadId = uploadId; }
+  async uploadPart(partNumber, value) {
+    const q = new URLSearchParams({ uploadId: this.uploadId, partNumber: String(partNumber) });
+    const res = await nativeFetch(`${this._base}/mpu/part?${q}`, { method: 'PUT', headers: AUTH, body: toBody(value), duplex: 'half' });
+    return readJson(res);
+  }
+  async complete(parts) {
+    return new R2Object(await rpc(`${this._base}/mpu/complete`, { uploadId: this.uploadId, parts: parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })) }));
+  }
+  async abort() {
+    const res = await nativeFetch(`${this._base}/mpu/abort`, { method: 'POST', headers: { ...AUTH, 'content-type': 'application/json' }, body: JSON.stringify({ uploadId: this.uploadId }) });
+    if (!res.ok) await readJson(res);
+  }
 }
 
 // ---------- Queues（producer） ----------

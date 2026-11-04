@@ -104,6 +104,15 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         tracing::info!("AI Gateway：http://{addr}/<gateway>/<provider>/...");
     }
 
+    if let Some(s3_cfg) = cfg.s3.clone() {
+        let addr: SocketAddr = format!("{}:{}", cfg.bind, s3_cfg.port).parse()?;
+        let all: Vec<Arc<App>> = apps.iter().map(|(a, _)| a.clone()).collect();
+        let s3 = crate::s3::S3::new(s3_cfg, &all);
+        let listener = tokio::net::TcpListener::bind(addr).await.with_context(|| format!("無法監聽 {addr}"))?;
+        tokio::spawn(async move { axum::serve(listener, crate::s3::router(s3)).await });
+        tracing::info!("R2 的 S3 API：http://{addr}（path-style）");
+    }
+
     tokio::signal::ctrl_c().await?;
     tracing::info!("收到中斷訊號，結束");
     Ok(())

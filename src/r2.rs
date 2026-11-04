@@ -19,7 +19,13 @@ impl R2 {
         std::fs::create_dir_all(root.join("tmp"))?;
         let conn = open_sqlite(&root.join("r2.sqlite"))?;
         conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS objects (
+            "CREATE TABLE IF NOT EXISTS uploads (
+               upload_id TEXT PRIMARY KEY, bucket TEXT NOT NULL, key TEXT NOT NULL,
+               http_metadata TEXT NOT NULL, custom_metadata TEXT NOT NULL, created INTEGER NOT NULL);
+             CREATE TABLE IF NOT EXISTS parts (
+               upload_id TEXT NOT NULL, n INTEGER NOT NULL, etag TEXT NOT NULL, size INTEGER NOT NULL,
+               PRIMARY KEY (upload_id, n)) WITHOUT ROWID;
+             CREATE TABLE IF NOT EXISTS objects (
                bucket TEXT NOT NULL, key TEXT NOT NULL, size INTEGER NOT NULL, etag TEXT NOT NULL,
                version TEXT NOT NULL, uploaded INTEGER NOT NULL,
                http_metadata TEXT NOT NULL, custom_metadata TEXT NOT NULL,
@@ -39,11 +45,10 @@ impl R2 {
 
     /// 已經寫好的暫存檔搬到正式位置並記錄中繼資料。
     #[allow(clippy::too_many_arguments)]
-    pub fn commit(&self, bucket: &str, key: &str, tmp: &Path, size: u64, md5: Md5, http: &Value, custom: &Value) -> Result<Value> {
+    pub fn commit(&self, bucket: &str, key: &str, tmp: &Path, size: u64, etag: &str, http: &Value, custom: &Value) -> Result<Value> {
         let dest = self.file_path(bucket, key);
         std::fs::create_dir_all(dest.parent().unwrap())?;
         std::fs::rename(tmp, &dest)?;
-        let etag = hex::encode(md5.finalize());
         let version = format!("{:032x}", rand::random::<u128>());
         let uploaded = chrono::Utc::now().timestamp_millis();
         let conn = self.conn.lock().unwrap();
@@ -51,7 +56,7 @@ impl R2 {
             "INSERT OR REPLACE INTO objects VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             params![bucket, key, size as i64, etag, version, uploaded, http.to_string(), custom.to_string()],
         )?;
-        Ok(object_json(key, size as i64, &etag, &version, uploaded, http.clone(), custom.clone()))
+        Ok(object_json(key, size as i64, etag, &version, uploaded, http.clone(), custom.clone()))
     }
 
     pub fn head(&self, bucket: &str, key: &str) -> Result<Option<Value>> {
@@ -71,6 +76,115 @@ impl R2 {
             conn.execute("DELETE FROM objects WHERE bucket = ? AND key = ?", params![bucket, k])?;
             let _ = std::fs::remove_file(self.file_path(bucket, k));
         }
+        Ok(())
+    }
+
+    /// 複製物件；metadata 給 None 就沿用來源的
+    pub fn copy(&self, src_bucket: &str, src_key: &str, bucket: &str, key: &str, metadata: Option<(&Value, &Value)>) -> Result<Option<Value>> {
+        let Some(src) = self.head(src_bucket, src_key)? else { return Ok(None) };
+        let tmp = self.tmp_path();
+        std::fs::copy(self.file_path(src_bucket, src_key), &tmp)?;
+        let (http, custom) = match metadata {
+            Some((h, c)) => (h.clone(), c.clone()),
+            None => (src["httpMetadata"].clone(), src["customMetadata"].clone()),
+        };
+        let size = src["size"].as_u64().unwrap_or(0);
+        Ok(Some(self.commit(bucket, key, &tmp, size, src["etag"].as_str().unwrap_or(""), &http, &custom)?))
+    }
+
+    // ---------- multipart upload ----------
+
+    pub fn create_upload(&self, bucket: &str, key: &str, http: &Value, custom: &Value) -> Result<String> {
+        let id = format!("{:032x}", rand::random::<u128>());
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO uploads VALUES (?, ?, ?, ?, ?, ?)",
+            params![id, bucket, key, http.to_string(), custom.to_string(), chrono::Utc::now().timestamp_millis()],
+        )?;
+        Ok(id)
+    }
+
+    /// (bucket, key)；上傳不存在回 None
+    pub fn upload(&self, upload_id: &str) -> Result<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row("SELECT bucket, key FROM uploads WHERE upload_id = ?", [upload_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?)
+    }
+
+    pub fn part_path(&self, upload_id: &str, n: u32) -> PathBuf {
+        self.root.join("parts").join(upload_id).join(n.to_string())
+    }
+
+    pub fn commit_part(&self, upload_id: &str, n: u32, tmp: &Path, size: u64, etag: &str) -> Result<()> {
+        let dest = self.part_path(upload_id, n);
+        std::fs::create_dir_all(dest.parent().unwrap())?;
+        std::fs::rename(tmp, &dest)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute("INSERT OR REPLACE INTO parts VALUES (?, ?, ?, ?)", params![upload_id, n, etag, size as i64])?;
+        Ok(())
+    }
+
+    /// 依 parts 的順序接起來。etag 和 S3 一樣是「各段 MD5 的 MD5」加上 -段數
+    pub fn complete_upload(&self, upload_id: &str, parts: &[(u32, String)]) -> Result<Value> {
+        use std::io::Write;
+        let (bucket, key, http, custom): (String, String, String, String) = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT bucket, key, http_metadata, custom_metadata FROM uploads WHERE upload_id = ?",
+                [upload_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()?
+            .ok_or_else(|| anyhow::anyhow!("NoSuchUpload：找不到上傳 {upload_id}"))?
+        };
+        if parts.is_empty() {
+            anyhow::bail!("InvalidPart：至少要有一段");
+        }
+        let known: std::collections::HashMap<u32, String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT n, etag FROM parts WHERE upload_id = ?")?;
+            stmt.query_map([upload_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        let tmp = self.tmp_path();
+        let mut out = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+        let mut digests = Vec::new();
+        let mut size = 0u64;
+        let mut last = 0;
+        for (n, etag) in parts {
+            if *n <= last {
+                anyhow::bail!("InvalidPartOrder：段號要遞增");
+            }
+            last = *n;
+            let want = etag.trim_matches('"');
+            if known.get(n).map(|e| e.as_str()) != Some(want) {
+                anyhow::bail!("InvalidPart：第 {n} 段不存在或 ETag 不符");
+            }
+            let mut f = std::fs::File::open(self.part_path(upload_id, *n))?;
+            size += std::io::copy(&mut f, &mut out)?;
+            digests.extend(hex::decode(want)?);
+        }
+        out.flush()?;
+        drop(out);
+        let etag = format!("{}-{}", hex::encode(Md5::digest(&digests)), parts.len());
+        let obj = self.commit(
+            &bucket,
+            &key,
+            &tmp,
+            size,
+            &etag,
+            &serde_json::from_str(&http).unwrap_or(json!({})),
+            &serde_json::from_str(&custom).unwrap_or(json!({})),
+        )?;
+        self.abort_upload(upload_id)?;
+        Ok(obj)
+    }
+
+    pub fn abort_upload(&self, upload_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM uploads WHERE upload_id = ?", [upload_id])?;
+        conn.execute("DELETE FROM parts WHERE upload_id = ?", [upload_id])?;
+        let _ = std::fs::remove_dir_all(self.root.join("parts").join(upload_id));
         Ok(())
     }
 
@@ -133,4 +247,65 @@ fn object_json(key: &str, size: i64, etag: &str, version: &str, uploaded: i64, h
         "version": version, "uploaded": uploaded,
         "httpMetadata": http, "customMetadata": custom, "storageClass": "Standard",
     })
+}
+
+/// 收一個上傳的內容寫到暫存檔，同時算 MD5 與 SHA-256。
+/// aws_chunked = true 時解開 S3 的 aws-chunked 編碼（每段前面有「十六進位長度;簽章」）。
+pub struct Received {
+    pub size: u64,
+    pub md5: String,
+    pub sha256: String,
+}
+
+pub async fn receive(body: axum::body::Body, aws_chunked: bool, tmp: &Path) -> Result<Received> {
+    use futures_util::TryStreamExt;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let stream = body.into_data_stream().map_err(std::io::Error::other);
+    let mut reader = tokio::io::BufReader::new(tokio_util::io::StreamReader::new(stream));
+    let mut file = tokio::io::BufWriter::new(tokio::fs::File::create(tmp).await?);
+    let mut md5 = Md5::new();
+    let mut sha = Sha256::new();
+    let mut size = 0u64;
+    let mut buf = vec![0u8; 64 * 1024];
+    if aws_chunked {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).await? == 0 {
+                break;
+            }
+            let hex_len = line.trim().split(';').next().unwrap_or("0");
+            let mut left = u64::from_str_radix(hex_len.trim(), 16).map_err(|_| anyhow::anyhow!("aws-chunked 格式不對"))?;
+            if left == 0 {
+                break; // 後面是 trailer（checksum），不需要
+            }
+            while left > 0 {
+                let want = left.min(buf.len() as u64) as usize;
+                let n = reader.read(&mut buf[..want]).await?;
+                if n == 0 {
+                    anyhow::bail!("aws-chunked 內容不完整");
+                }
+                md5.update(&buf[..n]);
+                sha.update(&buf[..n]);
+                file.write_all(&buf[..n]).await?;
+                size += n as u64;
+                left -= n as u64;
+            }
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf).await?;
+        }
+    } else {
+        loop {
+            let n = reader.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            md5.update(&buf[..n]);
+            sha.update(&buf[..n]);
+            file.write_all(&buf[..n]).await?;
+            size += n as u64;
+        }
+    }
+    file.flush().await?;
+    Ok(Received { size, md5: hex::encode(md5.finalize()), sha256: hex::encode(sha.finalize()) })
 }

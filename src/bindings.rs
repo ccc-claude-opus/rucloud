@@ -12,13 +12,11 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use bytes::Bytes;
-use futures_util::StreamExt;
-use md5::{Digest, Md5};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub struct Hub {
     pub apps: HashMap<String, Arc<App>>,
@@ -68,6 +66,10 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/r2/{binding}/head", get(r2_head))
         .route("/b/{app}/r2/{binding}/list", get(r2_list))
         .route("/b/{app}/r2/{binding}/delete", post(r2_delete_many))
+        .route("/b/{app}/r2/{binding}/mpu/create", post(mpu_create))
+        .route("/b/{app}/r2/{binding}/mpu/part", axum::routing::put(mpu_part))
+        .route("/b/{app}/r2/{binding}/mpu/complete", post(mpu_complete))
+        .route("/b/{app}/r2/{binding}/mpu/abort", post(mpu_abort))
         .route("/b/{app}/queue/{queue}/send", post(queue_send))
         .route("/b/{app}/ratelimit/{binding}", post(ratelimit))
         .route("/b/{app}/do-storage/{ns}/{id}", post(do_storage))
@@ -232,21 +234,10 @@ async fn r2_put(State(hub): S, Path((app, binding)): Path<(String, String)>, Que
         .unwrap_or(json!({}));
     // 一邊收一邊寫暫存檔、算 MD5，不把整個物件放進記憶體
     let tmp = r2.tmp_path();
-    let mut file = tokio::fs::File::create(&tmp).await.map_err(|e| anyhow!(e))?;
-    let mut md5 = Md5::new();
-    let mut size = 0u64;
-    let mut stream = req.into_body().into_data_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| anyhow!(e))?;
-        md5.update(&chunk);
-        size += chunk.len() as u64;
-        file.write_all(&chunk).await.map_err(|e| anyhow!(e))?;
-    }
-    file.flush().await.map_err(|e| anyhow!(e))?;
-    drop(file);
+    let got = crate::r2::receive(req.into_body(), false, &tmp).await?;
     let http = if opts["httpMetadata"].is_object() { opts["httpMetadata"].clone() } else { json!({}) };
     let custom = if opts["customMetadata"].is_object() { opts["customMetadata"].clone() } else { json!({}) };
-    Ok(Json(blocking(move || r2.commit(&b, &key, &tmp, size, md5, &http, &custom)).await?))
+    Ok(Json(blocking(move || r2.commit(&b, &key, &tmp, got.size, &got.md5, &http, &custom)).await?))
 }
 
 async fn r2_delete(State(hub): S, Path((app, binding)): Path<(String, String)>, Query(q): Query<R2Query>) -> R<StatusCode> {
@@ -273,6 +264,62 @@ async fn r2_list(State(hub): S, Path((app, binding)): Path<(String, String)>, Qu
         })
         .await?,
     ))
+}
+
+// ---------- R2 multipart upload ----------
+
+async fn mpu_create(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
+    let key = body["key"].as_str().filter(|k| !k.is_empty()).ok_or_else(|| anyhow!("R2 的 key 不能是空的"))?.to_string();
+    let http = if body["httpMetadata"].is_object() { body["httpMetadata"].clone() } else { json!({}) };
+    let custom = if body["customMetadata"].is_object() { body["customMetadata"].clone() } else { json!({}) };
+    let id = blocking(move || r2.create_upload(&b, &key, &http, &custom)).await?;
+    Ok(Json(json!({ "uploadId": id })))
+}
+
+#[derive(Deserialize)]
+struct PartQuery {
+    #[serde(rename = "uploadId")]
+    upload_id: String,
+    #[serde(rename = "partNumber")]
+    part_number: u32,
+}
+
+async fn mpu_part(State(hub): S, Path((app, binding)): Path<(String, String)>, Query(q): Query<PartQuery>, req: Request) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    let (b, r2) = (bucket(&app, &binding)?, app.r2()?);
+    let (r2a, id) = (r2.clone(), q.upload_id.clone());
+    match blocking(move || r2a.upload(&id)).await? {
+        Some((ub, _)) if ub == b => {}
+        _ => return Err(not_found(&format!("multipart upload {}", q.upload_id))),
+    }
+    let tmp = r2.tmp_path();
+    let got = crate::r2::receive(req.into_body(), false, &tmp).await?;
+    let etag = got.md5.clone();
+    blocking(move || r2.commit_part(&q.upload_id, q.part_number, &tmp, got.size, &got.md5)).await?;
+    Ok(Json(json!({ "partNumber": q.part_number, "etag": etag })))
+}
+
+async fn mpu_complete(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    let (_b, r2) = (bucket(&app, &binding)?, app.r2()?);
+    let id = body["uploadId"].as_str().unwrap_or_default().to_string();
+    let parts: Vec<(u32, String)> = body["parts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| (p["partNumber"].as_u64().unwrap_or(0) as u32, p["etag"].as_str().unwrap_or_default().to_string()))
+        .collect();
+    Ok(Json(blocking(move || r2.complete_upload(&id, &parts)).await?))
+}
+
+async fn mpu_abort(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(body): Json<Value>) -> R<StatusCode> {
+    let app = hub.app(&app)?;
+    let (_b, r2) = (bucket(&app, &binding)?, app.r2()?);
+    let id = body["uploadId"].as_str().unwrap_or_default().to_string();
+    blocking(move || r2.abort_upload(&id)).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------- Queues、Rate limiting ----------

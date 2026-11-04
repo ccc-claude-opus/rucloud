@@ -1,5 +1,15 @@
 # 更新紀錄
 
+## 0.4.0 — R2 的 S3 相容 API 與 multipart upload
+
+* 新的 S3 相容端點（`rucloud.toml` 的 `[s3]`，或 `rucloud dev --s3-port`）：aws-cli、rclone、boto3 等工具可以直接存取 R2 bucket。
+  * AWS Signature V4 驗證：Authorization 標頭與 presigned URL（GET / PUT），含時間與到期檢查；內容帶 SHA-256 時會核對。
+  * ListBuckets、ListObjects（V1、V2，含分頁、delimiter、`encoding-type=url`）、Get（Range、If-None-Match）/ Head / Put / Delete / Copy Object、DeleteObjects、GetBucketLocation。
+  * Multipart upload（Create / UploadPart / Complete / Abort），ETag 和 S3 一樣是 `md5-段數`。
+  * 支援新版 SDK 預設的 `aws-chunked` 上傳編碼（含 checksum trailer）。
+* R2 binding 新增 `createMultipartUpload()`、`resumeMultipartUpload()`、`uploadPart()`、`complete()`、`abort()`。
+* 上傳一律串流寫入暫存檔，不經過記憶體。
+
 ## 0.3.0 — SQLite 型 Durable Objects
 
 * `migrations[].new_sqlite_classes` 宣告的類別改用 SQLite 儲存：每個物件一個資料庫檔（`<state>/<應用>/do-sqlite/<binding>/<id>.sqlite`），由擁有它的 Worker 程序用 Node 內建的 `node:sqlite` 直接開啟。

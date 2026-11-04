@@ -49,7 +49,8 @@ flowchart LR
 | 環境變數 / 密鑰（`.dev.vars`、`.env`、`env_file`） | `vars` | ✓ |
 | D1（`prepare/bind/first/all/run/raw`、`batch` 交易、`exec`） | `d1_databases` | ✓ |
 | KV（`get/put/delete/list`、metadata、TTL、bulk get） | `kv_namespaces` | ✓ 強一致 |
-| R2（`get/put/head/delete/list`、range、metadata、delimiter） | `r2_buckets` | ✓（無 multipart） |
+| R2（`get/put/head/delete/list`、range、metadata、delimiter、multipart） | `r2_buckets` | ✓ |
+| R2 的 S3 相容 API（SigV4、presigned URL、multipart） | `rucloud.toml` 的 `[s3]` | ✓ |
 | Queues（producer + consumer、批次、retry、delay、DLQ，跨應用） | `queues` | ✓ |
 | Cron Triggers | `triggers.crons` | ✓（開發模式可 `GET /__scheduled?cron=...`） |
 | Durable Objects（`fetch`、RPC 方法、`ctx.storage`、`blockConcurrencyWhile`、alarm、WebSocket hibernation、`ctx.storage.sql`） | `durable_objects`、`migrations` | ✓ |
