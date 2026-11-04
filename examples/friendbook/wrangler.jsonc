@@ -1,0 +1,38 @@
+// wrangler 設定：https://developers.cloudflare.com/workers/wrangler/configuration/
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "friendbook",
+	"main": "src/worker.js",
+	"compatibility_date": "2025-11-01",
+	// 部署前先建立資料庫並把 id 填進來：
+	//   npx wrangler d1 create friendbook-db
+	//   npx wrangler d1 execute friendbook-db --remote --file=schema.sql
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "friendbook-db",
+			"database_id": "81aa65a8-6de9-4fca-9485-cb37fd131de2"
+		}
+	],
+// 部署前先建立 namespace 並把 id 填進來（本機 wrangler dev 用 dummy id 也會自動建本地 KV）：
+//   npx wrangler kv namespace create CACHE
+"kv_namespaces": [
+  {
+    "binding": "KV",
+    "id": "613f4397eb42402da8cc87a89f08ec7b"
+  }
+],
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"run_worker_first": [
+			"/api/*",
+			"/img/*"
+		]
+	},
+	"observability": {
+		"enabled": true
+	}
+	// 登入的 cookie 用 HMAC 簽章，部署前要設定密鑰：
+	//   npx wrangler secret put AUTH_SECRET
+}

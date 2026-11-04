@@ -25,3 +25,6 @@ rustc-ice-*.txt
 
 # rucloud 本機資料
 .rucloud/
+
+# 本機密鑰
+.dev.vars

@@ -10,3 +10,17 @@ port = 8710
 
 [[app]]
 path = "hello"
+
+# 從 cloudflare/test-apps 複製過來的完整應用（D1 + KV + HMAC cookie）。
+# 示範用的密鑰在 .dev.vars.example；正式使用請改成自己的 env_file
+[[app]]
+path = "myshop"
+port = 8711
+env_file = "myshop/.dev.vars.example"
+d1_init = { DB = "schema.sql" }
+
+[[app]]
+path = "friendbook"
+port = 8712
+env_file = "friendbook/.dev.vars.example"
+d1_init = { DB = "schema.sql" }

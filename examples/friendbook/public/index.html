@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>friendbook</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="vendor/katex.min.css">
+<!-- GFM：marked（表格）+ DOMPurify（消毒）；TeX 用 KaTeX；mermaid 需要時才動態載入 -->
+<script defer src="vendor/marked.min.js"></script>
+<script defer src="vendor/purify.min.js"></script>
+<script defer src="vendor/katex.min.js"></script>
+</head>
+<body>
+
+<!-- 登入 / 註冊 -->
+<section id="view-auth" class="view" hidden>
+  <div class="auth-card">
+    <h1>friendbook</h1>
+    <p class="tagline">跟朋友分享短筆記。</p>
+    <div class="fields">
+      <label>email <input id="a-email" type="email" placeholder="you@example.com"></label>
+      <label id="a-name-row" hidden>帳號代號 <input id="a-name" type="text" placeholder="kevin.liao"></label>
+      <label>密碼（至少 6 個字）<input id="a-pass" type="password"></label>
+      <button id="a-go" class="primary wide">登入</button>
+      <div id="a-msg" class="error"></div>
+      <p class="switch"><span id="a-switch-text">還沒有帳號？</span><button id="a-switch" class="ghost">註冊</button></p>
+    </div>
+  </div>
+</section>
+
+<!-- 主畫面 -->
+<section id="view-app" class="view" hidden>
+  <header class="topbar">
+    <span class="logo">friendbook</span>
+    <span class="spacer"></span>
+    <span id="h-user" class="me-chip" title="我的個人頁"></span>
+    <button class="ghost" id="h-logout">登出</button>
+  </header>
+
+  <!-- 分頁標 -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="recommend">為你推薦</button>
+    <button class="tab" data-tab="following">追蹤中</button>
+    <button class="tab" data-tab="hot">熱門</button>
+    <button class="tab" data-tab="mine">我的</button>
+    <span class="spacer"></span>
+    <button id="mode-toggle" class="tab mode" title="點一下切換：純文字 ⇄ 排版後">排版後</button>
+  </nav>
+
+  <main class="feed" id="feed"></main>
+  <div id="feed-more-row"><button id="feed-more" class="ghost wide" hidden>載入更多</button></div>
+
+  <!-- 發文紐 -->
+  <button id="compose-btn" class="primary compose-fab" title="發一篇筆記">＋</button>
+
+  <!-- 發文視窗 -->
+  <div id="compose-modal" class="modal" hidden>
+    <div class="modal-card">
+      <textarea id="compose-text" maxlength="12000" placeholder="Markdown 或純文字都可以；可以直接 ⌘V 貼上圖片"></textarea>
+      <div id="compose-image" class="compose-image" hidden>
+        <img id="compose-image-preview" alt="貼圖預覽">
+        <button class="ghost" id="compose-image-remove" title="移除圖片">✕</button>
+      </div>
+      <div class="modal-actions">
+        <button class="ghost" id="compose-pick" title="選圖或直接 ⌘V 貼上">🖼 圖片</button>
+        <input type="file" id="compose-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+        <div id="compose-count" class="count">0 / 10000</div>
+        <div id="compose-msg" class="error"></div>
+        <button class="ghost" id="compose-cancel">取消</button>
+        <button class="primary" id="compose-go">發佈</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 貼文詳情視窗 -->
+  <div id="post-modal" class="modal" hidden>
+    <div class="modal-card">
+      <div id="post-detail"></div>
+      <div class="comment-row">
+        <input id="comment-input" placeholder="留言…">
+        <button class="primary" id="comment-send">送出</button>
+      </div>
+      <button class="ghost close-x" id="post-close">✕ 關閉</button>
+    </div>
+  </div>
+
+  <!-- 個人頁視窗 -->
+  <div id="profile-modal" class="modal" hidden>
+    <div class="modal-card">
+      <button class="ghost close-x" id="profile-close">✕ 關閉</button>
+      <div id="profile-body"></div>
+    </div>
+  </div>
+</section>
+
+<script src="app.js"></script>
+</body>
+</html>

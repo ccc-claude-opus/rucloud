@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MyShop 個人商店 POS</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 登入 / 註冊 -->
+<section id="view-auth" class="view" hidden>
+  <div class="auth-card panel">
+    <h1>MyShop</h1>
+    <p class="tagline">開自己的網路商店，先從一套簡單的 POS 開始。</p>
+    <div class="tabs">
+      <button class="tab active" data-auth="login">登入</button>
+      <button class="tab" data-auth="signup">註冊</button>
+    </div>
+    <div class="fields">
+      <label>email <input id="a-email" type="email" placeholder="you@example.com"></label>
+      <label id="a-name-row" hidden>店老闆的名字 <input id="a-name" type="text" placeholder="小明"></label>
+      <label>密碼（至少 6 個字）<input id="a-pass" type="password"></label>
+      <button id="a-go" class="primary wide">登入</button>
+      <div id="a-msg" class="error"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 開店（選模板） -->
+<section id="view-setup" class="view" hidden>
+  <div class="inner">
+    <h1>開店</h1>
+    <p class="tagline">先取一個店名，再挑一個模板，商品會自動建好（之後可以改）。</p>
+    <div class="panel fields">
+      <label>店名 <input id="s-name" type="text" placeholder="例如：小明手搖飲"></label>
+      <div id="s-templates" class="templates"></div>
+      <button id="s-go" class="primary">用這個模板開店</button>
+      <div id="s-msg" class="error"></div>
+    </div>
+  </div>
+</section>
+
+<!-- 主畫面 -->
+<section id="view-app" class="view" hidden>
+  <header>
+    <div class="head-row">
+      <h1 id="h-shop">我的商店</h1>
+      <span class="tag" id="h-user"></span>
+      <span class="spacer"></span>
+      <button class="ghost" data-goto="pos">點單</button>
+      <button class="ghost" data-goto="orders">訂單</button>
+      <button class="ghost" data-goto="report">報表</button>
+      <button class="ghost" data-goto="products">商品</button>
+      <button class="ghost" id="h-logout">登出</button>
+    </div>
+  </header>
+
+  <!-- POS 點單 -->
+  <div id="tab-pos" class="tab-body" hidden>
+    <div class="pos">
+      <div class="grid" id="pos-products"></div>
+      <aside class="cart panel">
+        <h3>購物車</h3>
+        <div id="cart-items" class="cart-items"><p class="muted">點左邊的商品加入</p></div>
+        <div class="cart-total">合計 <b id="cart-total">0</b> 元</div>
+        <button id="pos-submit" class="primary wide">完成這筆交易</button>
+        <div id="pos-msg" class="error"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 訂單 -->
+  <div id="tab-orders" class="tab-body" hidden>
+    <div class="row-wrap">
+      <h2>訂單</h2>
+      <label>日期 <input type="date" id="o-day"></label>
+      <span id="o-summary" class="tag"></span>
+    </div>
+    <div id="o-list" class="orders"></div>
+  </div>
+
+  <!-- 報表 -->
+  <div id="tab-report" class="tab-body" hidden>
+    <div class="row-wrap">
+      <h2>每日結算</h2>
+      <label>日期 <input type="date" id="r-day"></label>
+    </div>
+    <div id="r-cards" class="cards"></div>
+    <table class="report" id="r-table">
+      <thead><tr><th>商品</th><th>數量</th><th>金額</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 商品 -->
+  <div id="tab-products" class="tab-body" hidden>
+    <h2>商品管理</h2>
+    <div class="panel fields add-form">
+      <div class="row-wrap">
+        <input id="p-name" type="text" placeholder="商品名稱">
+        <input id="p-price" type="number" min="0" placeholder="價格">
+        <input id="p-cat" type="text" placeholder="分類（可空白）">
+        <button id="p-add" class="primary">新增</button>
+      </div>
+      <div id="p-msg" class="error"></div>
+    </div>
+    <table class="report">
+      <thead><tr><th>名稱</th><th>價格</th><th>分類</th><th></th></tr></thead>
+      <tbody id="p-list"></tbody>
+    </table>
+  </div>
+</section>
+
+<script src="app.js"></script>
+<div id="toast" hidden></div>
+</body>
+</html>

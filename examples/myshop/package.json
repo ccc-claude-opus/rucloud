@@ -1,0 +1,13 @@
+{
+  "name": "myshop",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db": "wrangler d1 execute myshop-db --local --file=schema.sql",
+    "db-remote": "wrangler d1 execute myshop-db --remote --file=schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

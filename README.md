@@ -85,12 +85,21 @@ flowchart LR
 
 或一次全部跑起來：`docker compose up --build`，再開 <http://localhost:8701>～<http://localhost:8704>。
 
-`examples/showcase` 示範所有綁定（R2、Queues、Cron、DO、Vectorize、限流、service binding）：
+## 範例
+
+| 範例 | 內容 | `rucloud serve examples/rucloud.toml` 後的網址 |
+|---|---|---|
+| [examples/showcase](examples/showcase) | 所有綁定一次示範（R2、Queues、Cron、DO、Vectorize、限流、service binding） | <http://localhost:8710> |
+| [examples/hello](examples/hello) | 最小 Worker，給 showcase 的 service binding 呼叫 | <http://hello.localhost:8700> |
+| [examples/myshop](examples/myshop) | 個人商店 POS：D1、HMAC cookie、PBKDF2（取自 test-apps） | <http://localhost:8711> |
+| [examples/friendbook](examples/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
 
 ```bash
 rucloud serve examples/rucloud.toml
 curl localhost:8710/api/do        # Durable Object 計數器
 ```
+
+myshop 與 friendbook 示範用的 `AUTH_SECRET` 放在 `.dev.vars.example`，自己部署時請換掉。
 
 ## 授權
 
