@@ -1,5 +1,22 @@
 # 更新紀錄
 
+## 1.4.0 — 執行中新增應用
+
+* **`[dynamic]`**：透過管理 API 在執行中新增、更新、刪除應用，不必改 `rucloud.toml`、不必重新啟動。給「替使用者執行程式碼」的服務用（例如 [examples/app-builder](examples/app-builder)），每個應用：
+  * 自己的 Worker 程序與沙箱（讀不到其他應用與伺服器的檔案）、自己的 D1 / KV / R2 / Durable Objects
+  * 自己的網域：edge 的 `<名稱>.<網域>`（瀏覽器不會把其他網域的 cookie 送過來）
+  * 記憶體上限（預設 128 MB）、卡住 5 秒就重開，只影響自己
+  * 啟動時套用 D1 migrations；重新啟動後還在（`<state_dir>/dynamic.json`）
+* 管理 API：`PUT /apps/<名稱>`（body 是 tar.gz：新增或部署新版本）、`DELETE /apps/<名稱>[?purge=true]`。
+* 安全限制：
+  * 名稱必須以 `prefix`（預設 `gen-`）開頭，不能覆蓋設定檔裡的應用
+  * 不能用會碰到其他應用或伺服器資源的綁定：services、queues、ai、analytics_engine_datasets、hyperdrive、workflows
+  * `main`、`assets.directory`、`migrations_dir` 必須在上傳的資料夾裡
+  * `[dynamic] token` 只能管理 `prefix` 開頭的應用；`grant` 把管理網址與這個 token 放進指定應用的 env（不設 token 就每次啟動隨機產生）
+  * 開了 `[dynamic]` 而管理 API 沒有 token 時，自動產生並存在 `<state_dir>/admin-token`（產生的程式碼連得到本機的管理埠）
+* 上傳的版本略過 macOS `tar` 放進來的 `._*` 與 `.DS_Store`；D1 migrations 略過 `.` 開頭的檔案。
+* examples/app-builder：產生的每個專案部署成獨立的應用 `gen-<專案id>`（取代 app-runner）；切換版本就是部署那個版本上線。
+
 ## 1.3.0 — 持續複寫
 
 * **`[replicate]`**：把整個 `state_dir` 持續送到 S3 相容儲存（R2、AWS S3、MinIO，或另一台 rucloud 的 S3 API）或另一個資料夾（`file:///…`，例如 NAS）。

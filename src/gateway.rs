@@ -6,7 +6,6 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Response, StatusCode, header};
 use axum::response::IntoResponse;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,7 +31,7 @@ pub async fn app_handler(
 
 /// 共用入口：依 Host 找應用
 pub async fn edge_handler(
-    State(routes): State<Arc<HashMap<String, Arc<crate::app::Slot>>>>,
+    State(registry): State<Arc<crate::registry::Registry>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response<Body> {
@@ -42,8 +41,7 @@ pub async fn edge_handler(
         .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
         .map(|(h, _)| h)
         .unwrap_or(host);
-    let app = routes.get(host).or_else(|| routes.get(host.split('.').next().unwrap_or("")));
-    match app {
+    match registry.by_host(host) {
         Some(slot) => handle(&slot.get(), req, peer).await,
         None => (StatusCode::NOT_FOUND, format!("rucloud：沒有應用對應到主機 {host}\n")).into_response(),
     }

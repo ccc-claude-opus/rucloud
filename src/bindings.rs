@@ -14,12 +14,11 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 pub struct Hub {
-    pub apps: HashMap<String, Arc<crate::app::Slot>>,
+    pub apps: Arc<crate::registry::Registry>,
     pub queues: Arc<Queues>,
     pub analytics: Arc<crate::analytics::Analytics>,
 }

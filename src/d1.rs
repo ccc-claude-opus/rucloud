@@ -92,7 +92,8 @@ impl D1 {
             Ok(rd) => rd
                 .flatten()
                 .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.ends_with(".sql"))
+                // ._xxx.sql 是 macOS 的 tar 放進來的延伸屬性檔，不是 SQL
+                .filter(|n| n.ends_with(".sql") && !n.starts_with('.'))
                 .collect(),
             Err(_) => vec![],
         };

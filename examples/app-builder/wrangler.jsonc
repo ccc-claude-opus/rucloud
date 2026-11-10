@@ -1,9 +1,11 @@
 // app-builder：AI 網站產生器（rucloud 專用；Cloudflare 免費方案 10ms CPU 撐不起長串流）
-// 產生的 app 由 runner/（app-runner）執行，兩個要一起跑：rucloud serve examples/app-builder/rucloud.toml
+// 產生的每個專案部署成 rucloud 的獨立應用（rucloud.toml 的 [dynamic]）：rucloud serve examples/app-builder/rucloud.toml
 {
   "name": "app-builder",
   "main": "src/worker.js",
   "compatibility_date": "2025-11-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/apps/*"] },
-  "d1_databases": [{ "binding": "DB", "database_name": "app-builder-db", "database_id": "local" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "app-builder-db", "database_id": "local" }],
+  // 產生的 app 的網址（{name} = gen-<專案id>）；正式環境例如 https://{name}.apps.example.com
+  "vars": { "APPS_URL": "http://{name}.localhost:8700" }
 }

@@ -93,6 +93,7 @@ flowchart LR
 | `rucloud analytics "SELECT …"` | 查 Analytics Engine |
 | `rucloud backup -o 檔案`、`rucloud restore 檔案` | 備份與還原所有資料 |
 | `rucloud replica status \| restore [--at 時間]` | 持續複寫（`[replicate]`）的狀態與還原 |
+| 管理 API `PUT /apps/<名稱>`、`DELETE /apps/<名稱>` | 執行中新增、更新、刪除應用（`[dynamic]`，見 [doc/deploy.md](doc/deploy.md)） |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
 `rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。
@@ -122,7 +123,7 @@ flowchart LR
 | [examples/markpedia](examples/markpedia) | Markdown 維基百科：D1 + Assets，三層分類樹（9 學門 / 36 次分類 / 111 條目）（取自 test-apps） | <http://localhost:8714> |
 | [examples/map](examples/map) | [Leaflet](https://leafletjs.com/) 釘選地圖：點地圖新增釘選，資料存 D1 | <http://localhost:8715> |
 | [examples/music](examples/music) | 音樂學習：樂理教室、聽力訓練、跟彈歌曲、Web MIDI 虛擬鋼琴，成績存 D1 | <http://localhost:8716> |
-| [examples/app-builder](examples/app-builder) | AI 網站產生器（Lovable 式）：帳號、AI 對話串流，可產出靜態網頁或全端 Worker + D1 專案並打包下載；產生的 app 由另一個應用 app-runner 執行（rucloud 專用） | <http://localhost:8717>（runner：<http://127.0.0.1:8719>） |
+| [examples/app-builder](examples/app-builder) | AI 網站產生器（Lovable 式）：帳號、AI 對話串流，可產出靜態網頁或全端 Worker + D1 專案並打包下載；每個產生的專案在執行中新增成獨立的應用（`[dynamic]`，rucloud 專用） | <http://localhost:8717> |
 
 ```bash
 rucloud serve examples/rucloud.toml

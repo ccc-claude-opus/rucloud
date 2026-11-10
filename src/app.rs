@@ -48,6 +48,8 @@ pub struct Ctx {
     pub bindings_url: String,
     pub http: reqwest::Client,
     pub dev: bool,
+    /// [dynamic] 的 grant：應用名稱 → 額外放進 env 的變數（RUCLOUD_ADMIN_URL、RUCLOUD_DYNAMIC_TOKEN）
+    pub granted: Arc<BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 /// 跨版本不變的東西：換版時新舊 Worker 程序會同時存在一下子，token 要相同；計數與 log 也要接續
@@ -86,6 +88,9 @@ pub fn app_name(entry: &AppEntry) -> Result<String> {
         .path
         .canonicalize()
         .with_context(|| format!("找不到應用資料夾 {}", entry.path.display()))?;
+    if let Some(name) = &entry.name {
+        return Ok(name.clone());
+    }
     let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
     Ok(entry
         .name
@@ -161,6 +166,9 @@ impl App {
             for (k, v) in config::parse_env(&text) {
                 vars.insert(k, Value::String(v));
             }
+        }
+        for (k, v) in ctx.granted.get(&name).into_iter().flatten() {
+            vars.insert(k.clone(), Value::String(v.clone()));
         }
 
         let assets = cfg.assets.as_ref().map(|a| Assets::new(&dir, a));

@@ -4,6 +4,16 @@ state_dir = "../.rucloud"
 [edge]
 port = 8700          # http://showcase.localhost:8700、http://hello.localhost:8700
 
+# 管理介面：http://127.0.0.1:8799（只聽本機）。開了 [dynamic] 又沒設 token 時，
+# token 會自動產生在 ../.rucloud/admin-token
+[admin]
+port = 8799
+
+# app-builder 產生的每個專案，在執行中新增成一個獨立的應用：http://gen-<專案id>.localhost:8700
+# 各自的 Worker 程序、沙箱與資料；app-builder 透過 grant 拿到部署用的網址與 token
+[dynamic]
+grant = ["app-builder"]
+
 [[app]]
 path = "showcase"
 port = 8710
@@ -54,13 +64,6 @@ d1_init = { DB = "schema.sql" }
 path = "app-builder"
 port = 8717
 d1_init = { DB = "schema.sql" }
-
-# 執行 app-builder 產生的 app（另一個程序、另一個主機名稱：http://127.0.0.1:8719）
-[[app]]
-path = "app-builder/runner"
-port = 8719
-max_block_ms = 5000
-memory_mb = 256
 
 # 棋藝軒：棋類桌遊對戰平台（Durable Object + WebSocket hibernation，React 前端）
 [[app]]

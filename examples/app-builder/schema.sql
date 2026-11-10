@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS projects (
   user_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'static',
+  deployed_version INTEGER,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

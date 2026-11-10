@@ -1,12 +1,9 @@
 // app-builder：AI 網站產生器（rucloud 專用）
 //   /api/*            帳號（註冊/登入，HMAC 簽章 cookie）、AI 設定、專案與對話（SSE 串流）
-//   /apps/:id/...     轉址到 app-runner（另一個應用、另一個主機名稱）執行產生出來的 app
-//   Files（RPC）      給 app-runner 讀專案檔案，只能透過 service binding 呼叫
+//   /apps/:id         轉址到產生出來的 app：每個專案是 rucloud 裡一個獨立的應用 gen-<id>（自己的程序、資料、網域）
 //   其他              靜態檔案（public/，由 Assets 提供）
 // AI 金鑰：使用者可在「AI 設定」填自己的 key（存 D1）；沒填就用環境變數
 //   NVIDIA_API_KEY / MINIMAX_API_KEY（.dev.vars 或 rucloud.toml 的 env_file）。
-
-import { WorkerEntrypoint } from 'cloudflare:workers';
 
 const COOKIE = 'session';
 const SESSION_DAYS = 30;
@@ -236,6 +233,9 @@ async function ensureSchema(db) {
   try {
     await db.prepare("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''").run();
   } catch { /* 已存在 */ }
+  try { // 目前部署（上線）的版本
+    await db.prepare('ALTER TABLE projects ADD COLUMN deployed_version INTEGER').run();
+  } catch { /* 已存在 */ }
   schemaReady = true;
 }
 
@@ -276,7 +276,7 @@ async function login(request, env, db) {
 
 // ---------- AI 設定 ----------
 
-async function mePayload(db, env, userId, runnerUrl) {
+async function mePayload(db, env, userId) {
   const user = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first();
   if (!user) throw new HttpError(401, '帳號不存在');
   const s = await getSettings(db, userId);
@@ -289,7 +289,6 @@ async function mePayload(db, env, userId, runnerUrl) {
       hasKey: !!s.api_key,
       keyTail: s.api_key ? s.api_key.slice(-4) : '',
     },
-    runnerUrl,
     providers: Object.entries(PROVIDERS).map(([id, p]) => ({
       id, name: p.name, model: p.model,
       hasEnvKey: !!(p.envKey && env[p.envKey]),
@@ -311,7 +310,7 @@ async function saveSettings(request, env, db, userId) {
       String(b.baseUrl || '').trim().slice(0, 200),
       String(b.model || '').trim().slice(0, 100),
       apiKey.slice(0, 300), new Date().toISOString()).run();
-    return json(await mePayload(db, env, userId, runnerUrl(request, env)));
+    return json(await mePayload(db, env, userId));
   });
 }
 
@@ -365,13 +364,14 @@ async function createProject(request, db, userId) {
   });
 }
 
-async function getProject(db, userId, id) {
-  return handle(async () => json(await projectPayload(db, await requireProject(db, userId, id))));
+async function getProject(env, db, userId, id) {
+  return handle(async () => json({ ...await projectPayload(db, await requireProject(db, userId, id)), url: appUrl(env, id) }));
 }
 
-async function deleteProject(db, userId, id) {
+async function deleteProject(env, db, userId, id) {
   return handle(async () => {
     const proj = await requireProject(db, userId, id);
+    await undeploy(env, proj.id);
     await db.batch([
       db.prepare('DELETE FROM messages WHERE project_id = ?').bind(proj.id),
       db.prepare('DELETE FROM versions WHERE project_id = ?').bind(proj.id),
@@ -566,7 +566,12 @@ async function chat(request, env, db, userId, projectId) {
         await db.prepare('INSERT INTO messages (project_id, role, content, reasoning, version, created_at) VALUES (?, ?, ?, ?, ?, ?)')
           .bind(proj.id, 'assistant', answer, think, version, new Date().toISOString()).run();
         await db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').bind(new Date().toISOString(), proj.id).run();
-        send({ t: 'done', version, bytes: saved, mode: proj.mode });
+        // 新版本馬上部署（每個專案是自己的 rucloud 應用）
+        let deployError = null;
+        if (version) {
+          try { await deployVersion(env, db, proj, version); } catch (e) { deployError = String(e?.message || e); }
+        }
+        send({ t: 'done', version, bytes: saved, mode: proj.mode, deployError });
       } catch (e) {
         send({ t: 'err', e: String(e?.message || e) });
       } finally {
@@ -578,49 +583,133 @@ async function chat(request, env, db, userId, projectId) {
   });
 }
 
-// ---------- 產生的 app：交給 app-runner 執行 ----------
+// ---------- 產生的 app：每個專案部署成一個獨立的 rucloud 應用 ----------
 
-// 產生的 app 由另一個應用 app-runner 執行（另一個 Node 程序、另一個主機名稱），
-// 它碰不到這裡的 env（AUTH_SECRET、AI 金鑰）與帳號資料庫，瀏覽器也不會把這裡的登入 cookie 送過去。
-// app-runner 透過 service binding 的 RPC 呼叫下面的 Files 拿專案檔案；公開網路呼叫不到它。
-export class Files extends WorkerEntrypoint {
-  // 版本號 v 沒給就用最新的；回傳 { mode, version } 或 null
-  async resolve(id, v) {
-    const db = this.env.DB;
-    await ensureSchema(db);
-    const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(Number(id)).first();
-    if (!proj) return null;
-    const table = proj.mode === 'full' ? 'version_files' : 'versions';
-    const row = v
-      ? await db.prepare(`SELECT version FROM ${table} WHERE project_id = ? AND version = ? LIMIT 1`).bind(proj.id, Number(v)).first()
-      : await db.prepare(`SELECT MAX(version) AS version FROM ${table} WHERE project_id = ?`).bind(proj.id).first();
-    return row?.version ? { mode: proj.mode, version: row.version } : null;
-  }
+// 產生的程式碼是使用者（透過 AI）寫的，等於不可信的程式，所以不在這裡執行：
+// 每個專案部署成 rucloud 的一個應用 gen-<專案id>（rucloud.toml 的 [dynamic]），
+// 有自己的 Worker 程序、沙箱、D1 與網域（gen-<id>.<網域>），碰不到這裡的密鑰、帳號資料庫與其他專案。
+// rucloud 透過 [dynamic] grant 把 RUCLOUD_ADMIN_URL、RUCLOUD_DYNAMIC_TOKEN 放進這裡的 env。
 
-  // 某個版本的檔案：[{ path, content }]；靜態網站只有 index.html
-  async files(id, version) {
-    const db = this.env.DB;
-    const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(Number(id)).first();
-    if (!proj) return [];
-    if (proj.mode === 'full') {
-      return (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ?')
-        .bind(proj.id, Number(version)).all()).results;
-    }
-    const row = await db.prepare('SELECT html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, Number(version)).first();
-    return row ? [{ path: 'index.html', content: row.html }] : [];
-  }
+const appName = (id) => `gen-${id}`;
+
+// 產生的 app 的網址：APPS_URL 的 {name} 換成應用名稱（例如 http://{name}.localhost:8700）
+function appUrl(env, id) {
+  return (env.APPS_URL || 'http://{name}.localhost:8700').replace('{name}', appName(id)).replace(/\/+$/, '') + '/';
 }
 
-// app-runner 的網址：環境變數 RUNNER_URL；沒設時依目前的主機推算（主機名稱一定要和這裡不同）
-//   localhost:8717 → http://127.0.0.1:8719、127.0.0.1:8717 → http://localhost:8719
-//   app-builder.localhost:8700（edge）→ app-runner.localhost:8700
-function runnerUrl(request, env) {
-  if (env.RUNNER_URL) return env.RUNNER_URL.replace(/\/+$/, '');
-  const u = new URL(request.url);
-  if (u.hostname.startsWith('app-builder.')) return `${u.protocol}//app-runner.${u.host.slice('app-builder.'.length)}`;
-  if (u.hostname === 'localhost') return `${u.protocol}//127.0.0.1:8719`;
-  if (u.hostname === '127.0.0.1') return `${u.protocol}//localhost:8719`;
-  return null; // 正式網域請設定 RUNNER_URL（例如 https://apps.example.com）
+// 部署用的檔案：wrangler.jsonc 一律由平台產生（AI 不能自己加綁定）；schema.sql 變成這個版本的 D1 migration
+async function deployFiles(db, proj, version) {
+  const enc = new TextEncoder();
+  const out = [];
+  if (proj.mode === 'full') {
+    const rows = (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ?')
+      .bind(proj.id, version).all()).results;
+    if (!rows.length) throw new HttpError(404, '找不到這個版本');
+    for (const r of rows) {
+      if (r.path === 'wrangler.jsonc' || r.path === 'wrangler.json' || r.path === 'wrangler.toml') continue;
+      if (r.path === 'schema.sql') out.push({ name: `migrations/v${String(version).padStart(4, '0')}.sql`, data: enc.encode(r.content) });
+      out.push({ name: r.path, data: enc.encode(r.content) });
+    }
+    out.push({ name: 'wrangler.jsonc', data: enc.encode(JSON.stringify({
+      name: appName(proj.id),
+      main: 'src/worker.js',
+      compatibility_date: '2025-11-01',
+      assets: { directory: './public', binding: 'ASSETS', run_worker_first: ['/api/*'] },
+      d1_databases: [{ binding: 'DB', database_name: 'db', database_id: 'local' }],
+    }, null, 2)) });
+  } else {
+    const row = await db.prepare('SELECT html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, version).first();
+    if (!row) throw new HttpError(404, '找不到這個版本');
+    out.push({ name: 'public/index.html', data: enc.encode(row.html) });
+    out.push({ name: 'wrangler.jsonc', data: enc.encode(JSON.stringify({
+      name: appName(proj.id), compatibility_date: '2025-11-01', assets: { directory: './public' },
+    })) });
+  }
+  return out;
+}
+
+// 部署某個版本：PUT /apps/gen-<id> 到 rucloud 的管理 API；成功就記下上線的版本
+async function deployVersion(env, db, proj, version) {
+  if (!env.RUCLOUD_ADMIN_URL || !env.RUCLOUD_DYNAMIC_TOKEN) {
+    throw new HttpError(500, '沒有 RUCLOUD_ADMIN_URL / RUCLOUD_DYNAMIC_TOKEN：請在 rucloud.toml 的 [dynamic] grant 加上 app-builder');
+  }
+  const body = await makeTarGz(await deployFiles(db, proj, version));
+  const res = await fetch(`${env.RUCLOUD_ADMIN_URL}/apps/${appName(proj.id)}?message=v${version}`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${env.RUCLOUD_DYNAMIC_TOKEN}`, 'content-type': 'application/gzip' },
+    body,
+  });
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok) throw new HttpError(502, `部署失敗：${r.error || res.status}`);
+  await db.prepare('UPDATE projects SET deployed_version = ? WHERE id = ?').bind(version, proj.id).run();
+  return appUrl(env, proj.id);
+}
+
+async function undeploy(env, id) {
+  if (!env.RUCLOUD_ADMIN_URL || !env.RUCLOUD_DYNAMIC_TOKEN) return;
+  await fetch(`${env.RUCLOUD_ADMIN_URL}/apps/${appName(id)}?purge=true`, {
+    method: 'DELETE', headers: { authorization: `Bearer ${env.RUCLOUD_DYNAMIC_TOKEN}` },
+  }).catch(() => {});
+}
+
+const latestVersion = async (db, proj) => (await db.prepare(
+  `SELECT MAX(version) AS v FROM ${proj.mode === 'full' ? 'version_files' : 'versions'} WHERE project_id = ?`,
+).bind(proj.id).first())?.v || null;
+
+// /apps/<id>：轉到這個專案自己的網域；還沒部署過（例如舊專案）就先部署最新版
+async function openApp(env, db, id) {
+  const proj = await db.prepare('SELECT * FROM projects WHERE id = ?').bind(id).first();
+  if (!proj) return html404('找不到這個 app');
+  if (!proj.deployed_version) {
+    const v = await latestVersion(db, proj);
+    if (!v) return html404('這個專案還沒有產出任何版本');
+    await deployVersion(env, db, proj, v);
+  }
+  return Response.redirect(appUrl(env, id), 302);
+}
+
+// 使用者切換上線的版本
+async function deployProject(request, env, db, userId, id) {
+  return handle(async () => {
+    const proj = await requireProject(db, userId, id);
+    const { version } = await readJson(request);
+    const v = Number(version) || await latestVersion(db, proj);
+    if (!v) throw new HttpError(404, '還沒有任何版本');
+    return json({ url: await deployVersion(env, db, proj, v), version: v });
+  });
+}
+
+const html404 = (msg) => new Response(`<h1>${msg}</h1>`, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8' } });
+
+// ---------- tar.gz（部署給 rucloud） ----------
+
+// files: [{ name, data: Uint8Array }] → ustar + gzip
+async function makeTarGz(files) {
+  const e = new TextEncoder();
+  const blocks = [];
+  const field = (buf, off, len, str) => buf.set(e.encode(str).subarray(0, len), off);
+  const octal = (n, len) => n.toString(8).padStart(len - 1, '0') + '\0';
+  for (const f of files) {
+    const name = e.encode(f.name);
+    if (name.length > 100) throw new HttpError(400, `檔名太長：${f.name}`);
+    const h = new Uint8Array(512);
+    field(h, 0, 100, f.name);
+    field(h, 100, 8, octal(0o644, 8));
+    field(h, 108, 8, octal(0, 8));
+    field(h, 116, 8, octal(0, 8));
+    field(h, 124, 12, octal(f.data.length, 12));
+    field(h, 136, 12, octal(Math.floor(Date.now() / 1000), 12));
+    h.fill(0x20, 148, 156); // checksum 先當空白
+    h[156] = 0x30; // 一般檔案
+    field(h, 257, 6, 'ustar\0');
+    field(h, 263, 2, '00');
+    const sum = h.reduce((a, b) => a + b, 0);
+    field(h, 148, 8, sum.toString(8).padStart(6, '0') + '\0 ');
+    blocks.push(h, f.data, new Uint8Array((512 - (f.data.length % 512)) % 512));
+  }
+  blocks.push(new Uint8Array(1024));
+  const tar = new Blob(blocks);
+  return new Uint8Array(await new Response(tar.stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
 }
 
 // ---------- ZIP 打包（deflate 可用就用，否則 store） ----------
@@ -794,10 +883,8 @@ export default {
     await ensureSchema(db);
 
     let m;
-    if (p.startsWith('/apps/')) {
-      const base = runnerUrl(request, env);
-      if (!base) return json({ error: '沒有設定 RUNNER_URL（app-runner 的網址）' }, 500);
-      return Response.redirect(base + p + url.search, 302);
+    if ((m = p.match(/^\/apps\/(\d+)\/?$/))) {
+      return handle(() => openApp(env, db, Number(m[1])));
     }
 
     // 防 CSRF：會改資料的 API 只接受同一個來源的請求
@@ -816,19 +903,22 @@ export default {
     const userId = await currentUserId(request, env);
     if (!userId) return json({ error: '請先登入' }, 401);
 
-    if (p === '/api/me') return handle(async () => json(await mePayload(db, env, userId, runnerUrl(request, env))));
+    if (p === '/api/me') return handle(async () => json(await mePayload(db, env, userId)));
     if (p === '/api/settings' && request.method === 'PUT') return saveSettings(request, env, db, userId);
     if (p === '/api/projects' && request.method === 'GET') return listProjects(db, userId);
     if (p === '/api/projects' && request.method === 'POST') return createProject(request, db, userId);
     if ((m = p.match(/^\/api\/projects\/(\d+)$/))) {
-      if (request.method === 'GET') return getProject(db, userId, Number(m[1]));
-      if (request.method === 'DELETE') return deleteProject(db, userId, Number(m[1]));
+      if (request.method === 'GET') return getProject(env, db, userId, Number(m[1]));
+      if (request.method === 'DELETE') return deleteProject(env, db, userId, Number(m[1]));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/chat$/)) && request.method === 'POST') {
       return handle(() => chat(request, env, db, userId, Number(m[1])));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/versions\/(\d+)$/))) {
       return versionHtml(db, userId, Number(m[1]), Number(m[2]), url.searchParams.get('path'));
+    }
+    if ((m = p.match(/^\/api\/projects\/(\d+)\/deploy$/)) && request.method === 'POST') {
+      return deployProject(request, env, db, userId, Number(m[1]));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/download$/)) && request.method === 'GET') {
       return downloadZip(env, db, userId, Number(m[1]), url.searchParams.get('v'));

@@ -139,6 +139,33 @@ fn check_ports(cfg: &ServeConfig, r: &mut Report) {
             r.warn("[s3] secret_access_key 太短");
         }
     }
+    if let Some(d) = &cfg.dynamic {
+        match &cfg.admin {
+            None => r.err("[dynamic] 的 API 在管理埠上，需要 [admin]"),
+            Some(a) if a.token.is_none() => r.ok("[dynamic]：管理 API 沒有設 token，啟動時會自動產生（存在 <state_dir>/admin-token）"),
+            Some(_) => {}
+        }
+        let names: Vec<String> = cfg.apps.iter().filter_map(|a| crate::app::app_name(a).ok()).collect();
+        for g in &d.grant {
+            if !names.contains(g) {
+                r.err(&format!("[dynamic] grant 的 {g} 不是 rucloud.toml 裡的應用"));
+            }
+        }
+        if d.token.as_deref().is_some_and(|t| t.len() < 16) {
+            r.err("[dynamic] token 太短（至少 16 個字）");
+        }
+        if cfg
+            .apps
+            .iter()
+            .any(|a| crate::app::app_name(a).is_ok_and(|n| n.starts_with(&d.prefix)))
+        {
+            r.err(&format!("rucloud.toml 裡有應用的名稱以 [dynamic] 的 prefix（{}）開頭", d.prefix));
+        }
+        r.ok(&format!(
+            "執行中新增應用：名稱 {}*，最多 {} 個，每個 {} MB、卡住 {} ms 重開",
+            d.prefix, d.max_apps, d.memory_mb, d.max_block_ms
+        ));
+    }
     if let Some(rp) = &cfg.replicate {
         match crate::replicate::Remote::new(rp) {
             Ok(_) if rp.interval == 0 => r.err("[replicate] interval 要大於 0"),

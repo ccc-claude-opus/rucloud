@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use axum::Router;
 use axum::routing::any;
 use serde_json::json;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -67,6 +66,40 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         .tcp_nodelay(true)
         .build()?;
 
+    // [dynamic]：管理 API 一定要有 token（產生的程式碼連得到本機的管理埠）；沒設就自動產生並存起來
+    let mut cfg = cfg;
+    let mut granted = std::collections::BTreeMap::new();
+    if let Some(d) = &mut cfg.dynamic {
+        let admin = cfg.admin.as_mut().context("[dynamic] 的 API 在管理埠上，需要 [admin]")?;
+        if admin.token.is_none() {
+            let path = state_root.join("admin-token");
+            let token = match std::fs::read_to_string(&path) {
+                Ok(t) if t.trim().len() >= 16 => t.trim().to_string(),
+                _ => {
+                    let t = format!("{:032x}", rand::random::<u128>());
+                    std::fs::write(&path, &t)?;
+                    #[cfg(unix)]
+                    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+                    t
+                }
+            };
+            tracing::info!("[dynamic] 管理 API 的 token 在 {}", path.display());
+            admin.token = Some(token);
+        }
+        let token = d.token.get_or_insert_with(|| format!("{:032x}", rand::random::<u128>())).clone();
+        let url = format!("http://127.0.0.1:{}", admin.port);
+        for name in &d.grant {
+            granted.insert(
+                name.clone(),
+                std::collections::BTreeMap::from([
+                    ("RUCLOUD_ADMIN_URL".to_string(), url.clone()),
+                    ("RUCLOUD_DYNAMIC_TOKEN".to_string(), token.clone()),
+                ]),
+            );
+        }
+    }
+    let cfg = cfg;
+
     let ctx = Ctx {
         state_root: state_root.clone(),
         node: cfg.node.clone(),
@@ -74,6 +107,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         bindings_url: bindings_url.clone(),
         http,
         dev,
+        granted: Arc::new(granted),
     };
     let mut apps: Vec<(Arc<Slot>, &crate::config::AppEntry)> = Vec::new();
     for entry in &cfg.apps {
@@ -98,8 +132,12 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             }
         });
     }
+    let registry = Arc::new(crate::registry::Registry::default());
+    for (slot, entry) in &apps {
+        registry.insert(slot.clone(), &entry.hosts, false);
+    }
     let hub = Arc::new(Hub {
-        apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
+        apps: registry.clone(),
         queues: queues.clone(),
         analytics: analytics.clone(),
     });
@@ -118,13 +156,8 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             }));
         }};
     }
-    let mut edge_routes: HashMap<String, Arc<Slot>> = HashMap::new();
     for (slot, entry) in &apps {
         let app = slot.get();
-        edge_routes.insert(slot.name.clone(), slot.clone());
-        for h in &entry.hosts {
-            edge_routes.insert(h.clone(), slot.clone());
-        }
         if let Some(port) = entry.port {
             let addr: SocketAddr = format!("{}:{port}", cfg.bind).parse().context("bind 位址不對")?;
             let listener = tokio::net::TcpListener::bind(addr)
@@ -146,7 +179,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         tokio::spawn(crate::workflows::run_loop(slot.clone(), slot.shared.workflows.clone()));
     }
     let edge_router = compressed(
-        Router::new().fallback(any(gateway::edge_handler)).with_state(Arc::new(edge_routes)),
+        Router::new().fallback(any(gateway::edge_handler)).with_state(registry.clone()),
         cfg.compression,
     );
     if let Some(tls_cfg) = cfg.tls.clone() {
@@ -192,20 +225,28 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     }
 
     let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let deployer = Arc::new(crate::deploy::Deployer {
+        ctx: ctx.clone(),
+        registry: registry.clone(),
+        queues: queues.clone(),
+        grace: Duration::from_secs(cfg.shutdown_timeout),
+        dynamic: cfg.dynamic.clone(),
+        dynamic_lock: Default::default(),
+    });
+    // 上次執行中新增的應用（[dynamic]）
+    if cfg.dynamic.is_some() {
+        deployer.load_dynamic().await;
+    }
     if let Some(admin_cfg) = cfg.admin.clone() {
         let addr: SocketAddr = format!("{}:{}", admin_cfg.bind, admin_cfg.port).parse()?;
-        let deployer = Arc::new(crate::deploy::Deployer {
-            ctx: ctx.clone(),
-            slots: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
-            queues: queues.clone(),
-            grace: Duration::from_secs(cfg.shutdown_timeout),
-        });
         let admin = Arc::new(crate::admin::Admin {
-            apps: apps.iter().map(|(a, _)| (a.name.clone(), a.clone())).collect(),
+            apps: registry.clone(),
             queues: queues.clone(),
             token: admin_cfg.token.clone(),
             draining: draining.clone(),
-            deployer,
+            dynamic_token: cfg.dynamic.as_ref().and_then(|d| d.token.clone()),
+            dynamic_prefix: cfg.dynamic.as_ref().map(|d| d.prefix.clone()),
+            deployer: deployer.clone(),
             analytics: analytics.clone(),
         });
         let listener = tokio::net::TcpListener::bind(addr)
@@ -229,7 +270,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     if drained.is_err() {
         tracing::warn!("還有請求沒做完，強制結束");
     }
-    for (slot, _) in &apps {
+    for (_, slot) in registry.all() {
         slot.background.lock().unwrap().cancel();
         if let Some(pool) = &slot.get().pool {
             pool.stop();

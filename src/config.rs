@@ -352,6 +352,8 @@ pub struct ServeConfig {
     pub tls: Option<crate::tls::TlsCfg>,
     /// 持續複寫到 S3 相容儲存或另一個資料夾
     pub replicate: Option<crate::replicate::ReplicateCfg>,
+    /// 允許透過管理 API 在執行中新增應用（每個應用自己的 Worker 程序與資料）
+    pub dynamic: Option<DynamicCfg>,
     /// 回應壓縮（gzip、brotli）
     #[serde(default = "yes")]
     pub compression: bool,
@@ -437,6 +439,48 @@ pub struct AppEntry {
 fn default_state() -> PathBuf {
     PathBuf::from(".rucloud")
 }
+/// `[dynamic]`：執行中新增的應用。用在「替使用者執行程式碼」的服務（例如 examples/app-builder），
+/// 每個應用是自己的 Worker 程序、自己的沙箱與資料，只能用不會碰到其他應用的綁定。
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DynamicCfg {
+    /// 應用名稱必須以它開頭，避免蓋掉設定檔裡的應用
+    #[serde(default = "dyn_prefix")]
+    pub prefix: String,
+    /// 只能新增、更新、刪除這些應用的 token（給產生應用的服務用，不必給它完整的管理 token）。
+    /// 不設就每次啟動隨機產生（透過 grant 交給需要的應用）
+    pub token: Option<String>,
+    /// 哪些應用（rucloud.toml 裡的名稱）可以管理執行中新增的應用：
+    /// rucloud 會把 RUCLOUD_ADMIN_URL 與 RUCLOUD_DYNAMIC_TOKEN 放進它們的 env
+    #[serde(default)]
+    pub grant: Vec<String>,
+    /// 最多幾個應用
+    #[serde(default = "dyn_max")]
+    pub max_apps: usize,
+    /// 每個應用幾個 Worker 程序
+    #[serde(default = "one")]
+    pub instances: usize,
+    /// 每個 Worker 程序的 JS heap 上限（MB）
+    #[serde(default = "dyn_memory")]
+    pub memory_mb: u32,
+    /// 事件迴圈卡住多久（毫秒）就重開程序
+    #[serde(default = "dyn_block")]
+    pub max_block_ms: u64,
+}
+
+fn dyn_prefix() -> String {
+    "gen-".into()
+}
+fn dyn_max() -> usize {
+    100
+}
+fn dyn_memory() -> u32 {
+    128
+}
+fn dyn_block() -> u64 {
+    5000
+}
+
 fn default_node() -> String {
     "node".into()
 }

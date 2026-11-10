@@ -23,6 +23,7 @@ mod observe;
 mod pool;
 mod queues;
 mod r2;
+mod registry;
 mod replicate;
 mod s3;
 mod server;
@@ -343,6 +344,7 @@ async fn main() -> Result<()> {
                 shutdown_timeout: 10,
                 compression: true,
                 replicate: None,
+                dynamic: None,
                 tls: match (tls_cert, tls_key) {
                     (Some(cert), Some(key)) => Some(tls::TlsCfg {
                         port: tls_port,

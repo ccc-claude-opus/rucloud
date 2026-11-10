@@ -121,6 +121,41 @@ rucloud reload myshop                     # 改了 .dev.vars / env_file 之後
 * 切換不停機：新版本的 Worker 全部起來才換上；起不來就維持原本的版本並回報錯誤。
 * 換版的瞬間新舊程序會短暫並存：同一個 Durable Object 在舊程序裡還沒做完的事件，可能和新程序的事件重疊。
 
+### 執行中新增應用（`[dynamic]`）
+
+要「替使用者執行程式碼」（例如 [examples/app-builder](../examples/app-builder) 把 AI 產生的專案跑起來）時，不要在自己的 Worker 裡用 `new Function` 執行：同一個程序裡，別人的程式碼讀得到你的 `env`、改得掉 `crypto` / `fetch`。改成讓每個使用者的專案在 rucloud 裡各自是一個應用：
+
+```toml
+[edge]
+port = 8700                 # 新增的應用在 http://<名稱>.<網域>:8700
+
+[admin]
+port = 8799                 # 不設 token 會自動產生在 <state_dir>/admin-token
+
+[dynamic]
+prefix = "gen-"             # 名稱必須以它開頭
+grant = ["app-builder"]     # 這些應用的 env 會有 RUCLOUD_ADMIN_URL、RUCLOUD_DYNAMIC_TOKEN
+max_apps = 100
+memory_mb = 128             # 每個 Worker 程序的 JS heap 上限
+max_block_ms = 5000         # 卡住多久就重開（只影響那個應用）
+```
+
+```bash
+# 新增或部署新版本：body 是應用資料夾的 tar.gz（wrangler.jsonc 在最上層）
+curl -X PUT -H "Authorization: Bearer $RUCLOUD_DYNAMIC_TOKEN" --data-binary @app.tar.gz \
+  "http://127.0.0.1:8799/apps/gen-42?message=v3"
+# 刪除（purge=true 連資料一起刪）
+curl -X DELETE -H "Authorization: Bearer $RUCLOUD_DYNAMIC_TOKEN" "http://127.0.0.1:8799/apps/gen-42?purge=true"
+```
+
+每個應用有自己的 Worker 程序、沙箱、D1 / KV / R2 / Durable Objects 與網域；啟動時套用 D1 migrations；重新啟動後還在。為了不碰到其他應用或伺服器，不能使用 services、queues、ai、analytics_engine_datasets、hyperdrive、workflows，`main`、`assets.directory`、`migrations_dir` 也必須在上傳的資料夾裡。`[dynamic] token` 只能管理 `prefix` 開頭的應用。
+
+注意：
+
+* 正式環境請讓這些應用用**另一個可註冊網域**（例如服務在 `example.com`、使用者的 app 在 `*.example-apps.com`），避免 `Domain=example.com` 的 cookie 互相影響。
+* rucloud 沒有限制 Worker 的對外連線：產生的程式碼連得到這台機器上的其他服務（管理埠需要 token，其他服務請自己加上驗證或防火牆）。
+* 沙箱是 Node 的權限模型，不是 VM。要跑可能惡意的程式碼，請再把整個 rucloud 放進容器或 VM。
+
 ### 持續複寫（建議正式環境開啟）
 
 ```toml

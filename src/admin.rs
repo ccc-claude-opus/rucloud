@@ -33,9 +33,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct Admin {
-    pub apps: BTreeMap<String, Arc<crate::app::Slot>>,
+    pub apps: Arc<crate::registry::Registry>,
     pub queues: Arc<Queues>,
     pub token: Option<String>,
+    /// [dynamic] 的 token：只能新增、更新、刪除、查看 prefix 開頭的應用
+    pub dynamic_token: Option<String>,
+    pub dynamic_prefix: Option<String>,
     pub draining: Arc<AtomicBool>,
     pub deployer: Arc<crate::deploy::Deployer>,
     pub analytics: Arc<crate::analytics::Analytics>,
@@ -46,6 +49,7 @@ type S = State<Arc<Admin>>;
 pub fn router(admin: Arc<Admin>) -> Router {
     let protected = Router::new()
         .route("/apps", get(apps))
+        .route("/apps/{app}", axum::routing::put(put_app).delete(delete_app))
         .route("/apps/{app}/logs", get(logs))
         .route("/apps/{app}/tail", get(tail))
         .route("/apps/{app}/versions", get(versions).post(upload))
@@ -70,28 +74,53 @@ pub fn router(admin: Arc<Admin>) -> Router {
 }
 
 async fn auth(State(admin): S, req: Request, next: Next) -> Response {
-    if let Some(want) = &admin.token {
-        let bearer = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-        let query = req.uri().query().unwrap_or("").split('&').find_map(|kv| kv.strip_prefix("token="));
-        if bearer.or(query) != Some(want.as_str()) {
-            return (StatusCode::UNAUTHORIZED, "需要管理 token\n").into_response();
+    let bearer = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let query = req.uri().query().unwrap_or("").split('&').find_map(|kv| kv.strip_prefix("token="));
+    let given = bearer.or(query);
+    if given.is_some() && given == admin.dynamic_token.as_deref() {
+        if dynamic_scope(&admin, req.method(), req.uri().path()) {
+            return next.run(req).await;
         }
+        return (StatusCode::FORBIDDEN, "這個 token 只能管理執行中新增的應用\n").into_response();
+    }
+    if let Some(want) = &admin.token
+        && given != Some(want.as_str())
+    {
+        return (StatusCode::UNAUTHORIZED, "需要管理 token\n").into_response();
     }
     next.run(req).await
 }
 
+/// [dynamic] 的 token 能做的事：PUT / DELETE /apps/<名稱>，GET /apps/<名稱>/logs、versions（名稱以 prefix 開頭）
+fn dynamic_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+    let Some(prefix) = &admin.dynamic_prefix else { return false };
+    let Some(rest) = path.strip_prefix("/apps/") else { return false };
+    let mut it = rest.split('/');
+    let name = it.next().unwrap_or("");
+    if !name.starts_with(prefix.as_str()) {
+        return false;
+    }
+    match (it.next(), it.next()) {
+        (None, _) => *method == Method::PUT || *method == Method::DELETE,
+        (Some("logs" | "versions"), None) => *method == Method::GET,
+        _ => false,
+    }
+}
+
 async fn health(State(admin): S) -> Response {
-    let apps: BTreeMap<&str, serde_json::Value> = admin
+    let apps: BTreeMap<String, serde_json::Value> = admin
         .apps
-        .iter()
+        .all()
+        .into_iter()
         .map(|(name, slot)| {
             let a = slot.get();
             let workers = a.pool.as_ref().map(|p| json!({ "ready": p.ready_count(), "total": p.len() }));
-            (name.as_str(), json!({ "workers": workers }))
+            (name, json!({ "workers": workers }))
         })
         .collect();
     if admin.draining.load(Ordering::Relaxed) {
@@ -106,7 +135,7 @@ async fn health(State(admin): S) -> Response {
 
 async fn metrics(State(admin): S) -> Response {
     let mut out = String::from(crate::observe::METRIC_HELP);
-    for (name, slot) in &admin.apps {
+    for (name, slot) in &admin.apps.all() {
         let a = slot.get();
         slot.shared
             .metrics
@@ -140,11 +169,13 @@ async fn apps(State(admin): S) -> axum::Json<serde_json::Value> {
     axum::Json(json!(
         admin
             .apps
+            .all()
             .iter()
             .map(|(n, slot)| {
                 let a = slot.get();
                 json!({
                     "name": n,
+                    "dynamic": admin.apps.is_dynamic(n),
                     "dir": a.dir,
                     "instances": a.pool.as_ref().map(|p| p.len()),
                     "version": crate::deploy::manifest(&admin.deployer.ctx, n).current,
@@ -171,7 +202,7 @@ async fn logs(State(admin): S, Path(app): Path<String>, Query(q): Query<LogQuery
 }
 
 async fn tail(State(admin): S, Path(app): Path<String>, Query(q): Query<LogQuery>) -> Response {
-    let Some(a) = admin.apps.get(&app).cloned() else {
+    let Some(a) = admin.apps.get(&app) else {
         return not_found(&app);
     };
     // 先訂閱再取最近的紀錄，中間進來的不會漏掉（頂多重複一筆）
@@ -202,7 +233,7 @@ fn fail(e: anyhow::Error) -> Response {
 }
 
 async fn versions(State(admin): S, Path(app): Path<String>) -> Response {
-    if !admin.apps.contains_key(&app) {
+    if admin.apps.get(&app).is_none() {
         return not_found(&app);
     }
     let m = crate::deploy::manifest(&admin.deployer.ctx, &app);
@@ -216,7 +247,7 @@ struct UploadQuery {
 }
 
 async fn upload(State(admin): S, Path(app): Path<String>, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> Response {
-    if !admin.apps.contains_key(&app) {
+    if admin.apps.get(&app).is_none() {
         return not_found(&app);
     }
     let (d, a2, msg) = (admin.deployer.clone(), app.clone(), q.message.unwrap_or_default());
@@ -231,6 +262,30 @@ async fn upload(State(admin): S, Path(app): Path<String>, Query(q): Query<Upload
         return fail(e.context(format!("版本 {} 已上傳但啟用失敗，目前版本沒有變", v.id)));
     }
     axum::Json(json!({ "version": v, "active": q.activate.unwrap_or(true) })).into_response()
+}
+
+/// 新增應用或部署新版本（rucloud.toml 的 [dynamic]）：body 是 tar.gz
+async fn put_app(State(admin): S, Path(app): Path<String>, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> Response {
+    match admin.deployer.put_dynamic(&app, body.to_vec(), q.message.unwrap_or_default()).await {
+        Ok((v, created)) => {
+            let status = if created { StatusCode::CREATED } else { StatusCode::OK };
+            (status, axum::Json(json!({ "app": app, "created": created, "version": v }))).into_response()
+        }
+        Err(e) => fail(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct DeleteQuery {
+    purge: Option<bool>,
+}
+
+async fn delete_app(State(admin): S, Path(app): Path<String>, Query(q): Query<DeleteQuery>) -> Response {
+    let purge = q.purge.unwrap_or(false);
+    match admin.deployer.delete_dynamic(&app, purge).await {
+        Ok(()) => axum::Json(json!({ "deleted": app, "purged": purge })).into_response(),
+        Err(e) => fail(e),
+    }
 }
 
 async fn activate(State(admin): S, Path((app, id)): Path<(String, String)>) -> Response {
@@ -351,6 +406,7 @@ async fn dashboard() -> Response {
 async fn stats(State(admin): S) -> Response {
     let apps: Vec<serde_json::Value> = admin
         .apps
+        .all()
         .iter()
         .map(|(name, slot)| {
             let a = slot.get();

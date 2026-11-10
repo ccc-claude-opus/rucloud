@@ -11,8 +11,8 @@ rucloud serve examples/app-builder/rucloud.toml                            # htt
 
 或跟其他範例一起跑：`rucloud serve examples/rucloud.toml`（<http://localhost:8717>）。
 
-要兩個應用一起跑：**app-builder**（帳號、AI 對話，<http://localhost:8717>）與 **app-runner**（`runner/`，執行產生出來的 app，<http://127.0.0.1:8719>）。
-`rucloud dev` 一次只跑一個資料夾，所以這個範例要用 `rucloud serve`。
+產生的每個專案會在執行中新增成 rucloud 的一個獨立應用 `gen-<專案id>`，網址是 <http://gen-1.localhost:8700> 這樣。
+這需要 `rucloud.toml` 的 `[edge]`、`[admin]`、`[dynamic]`，所以這個範例要用 `rucloud serve`，不能用 `rucloud dev`。
 
 > 注意：本範例**僅支援 rucloud**。Cloudflare Workers 免費方案每次呼叫只有 10ms CPU，
 > 撐不起 AI 長串流的轉發（實測 `exceededCpu`），所以不部署到 Cloudflare。
@@ -26,7 +26,7 @@ rucloud serve examples/app-builder/rucloud.toml                            # htt
 3. **AI 設定** — 選供應商（NVIDIA NIM / MiniMax / 自訂 OpenAI 相容端點）、模型、填 API Key（存在 D1，永遠不會回傳給前端）
    - 在 `.dev.vars` 或環境變數提供 `NVIDIA_API_KEY` / `MINIMAX_API_KEY`，就是全站預設金鑰，使用者不必填；沒有時使用者必須自填
 4. **專案 + AI 對話** — 像 Lovable：一句話產生第一版；之後持續用對話修改。回應以 **SSE 串流**顯示（含思考過程），完成後自動存成新版本
-5. **使用 app** — 右側即時預覽（iframe）、看程式碼（全端模式可切換檔案）、切換歷史版本；產生的 app 在 app-runner 的 `/apps/<專案id>/?v=<版本>`，公開可分享。全端專案是完整執行（後端 API + 專案專屬的 SQLite 資料庫）
+5. **使用 app** — 右側即時預覽（iframe）、看程式碼（全端模式可切換檔案）；選單切換版本就是部署那個版本上線。每個專案有自己的網址 `http://gen-<專案id>.localhost:8700/`，公開可分享。全端專案是完整執行（自己的 Worker 程序、D1 資料庫）
 6. **打包下載** — `⬇ 下載 zip`（或 `GET /api/projects/<id>/download?v=<版本>`）：靜態含 `index.html`；全端含完整專案結構與部署說明
 
 ## AI 怎麼產生程式
@@ -34,29 +34,33 @@ rucloud serve examples/app-builder/rucloud.toml                            # htt
 - **靜態**：系統提示要求模型輸出「單一 HTML 檔」，最後用 `<APP>…</APP>` 標記包住；Worker 抽出後存 D1 的 `versions` 表，`/apps/:id` 直接回傳
 - **全端**：系統提示要求用 `<FILE path="...">…</FILE>` 標記輸出多個檔案；Worker 抽出後存 `version_files` 表（`wrangler.jsonc` 與 README 由平台代產，確保格式正確）。zip 解開就是一個標準 wrangler 專案——在 rucloud 與 Cloudflare 上都能跑
 
-## 架構：為什麼產生的 app 要另外跑
+## 架構：每個專案是一個獨立的應用
 
 ```mermaid
 flowchart LR
   U[瀏覽器] -- "localhost:8717<br/>登入 cookie" --> B[app-builder<br/>帳號、AI 金鑰、AUTH_SECRET]
-  U -- "127.0.0.1:8719<br/>沒有 cookie" --> R[app-runner<br/>執行產生的 worker.js]
-  R -- "service binding RPC<br/>Files.resolve / files" --> B
-  R --> D[(每個專案一個<br/>SQLite Durable Object)]
+  B -- "PUT /apps/gen-&lt;id&gt;（tar.gz）<br/>[dynamic] token" --> A[rucloud 管理 API]
+  A --> G1[gen-1<br/>自己的程序、沙箱、D1]
+  A --> G2[gen-2<br/>自己的程序、沙箱、D1]
+  U -- "gen-1.localhost:8700<br/>沒有 cookie" --> G1
 ```
 
-產生的 `src/worker.js` 是使用者（透過 AI）寫的，等於**不可信的程式**。以前它在 app-builder 的程序裡執行，可以直接讀 `env`（`AUTH_SECRET`、AI 金鑰），或改掉 `crypto` / `fetch` 抓到其他人登入時的密碼。現在：
+產生的 `src/worker.js` 是使用者（透過 AI）寫的，等於**不可信的程式**，所以不在 app-builder 裡執行。每次產生新版本，app-builder 就把它打包成 tar.gz，用 rucloud 管理 API 的 `PUT /apps/gen-<專案id>` 部署（`rucloud.toml` 的 `[dynamic]`）：
 
-- **另一個程序**：app-runner 是另一個 rucloud 應用，`env` 只有 `BUILDER`（只能讀專案檔案的 RPC）與 `PROJECT_DB`，沒有任何密鑰，也碰不到帳號資料庫。
-- **另一個主機名稱**：cookie 不分埠號，所以 app-runner 必須用不同的主機名稱開，瀏覽器才不會把 app-builder 的登入 cookie 送給產生的程式。預設依 app-builder 的網址推算：`localhost` ↔ `127.0.0.1`（埠號 8719），或 edge 上的 `app-builder.<網域>` → `app-runner.<網域>`。正式環境請在 app-builder 的環境變數設定 `RUNNER_URL`（例如 `https://apps.example.com`，不要和 app-builder 同一個主機）。
-- **卡住只影響 runner**：`max_block_ms = 5000`，產生的程式碼無窮迴圈時 5 秒就重開 app-runner。
+- **自己的程序與沙箱**：讀不到 app-builder 的 `.dev.vars`、資料庫，也讀不到其他專案；`env` 只有自己的 `DB`、`ASSETS`。
+- **自己的網域**：`gen-<id>.localhost:8700`，瀏覽器不會把 app-builder 的登入 cookie 送過去，專案之間的 cookie 與 localStorage 也分開。
+- **自己的資源上限**：記憶體 128 MB、卡住 5 秒就重開，只影響那個專案。
+- **wrangler.jsonc 由平台產生**：AI 輸出的 wrangler 設定會被忽略，產生的程式碼不能自己加綁定；`schema.sql` 變成那個版本的 D1 migration（`migrations/v0003.sql`），新的資料表會在部署時建立。
+- **部署用的 token 不在 repo 裡**：rucloud 透過 `[dynamic] grant = ["app-builder"]` 把 `RUCLOUD_ADMIN_URL`、`RUCLOUD_DYNAMIC_TOKEN` 放進 app-builder 的 env；這個 token 只能管理 `gen-` 開頭的應用。管理 API 本身的 token 自動產生在 `.rucloud/admin-token`。
 
-**限制**：所有產生的 app 共用 app-runner 這一個程序，彼此之間沒有隔離，一個專案的程式碼可以干擾其他專案、讀到其他專案的資料庫與原始碼。要每個專案完全隔離，得讓每個專案各自是一個 rucloud 應用（目前 rucloud 不能在執行中新增應用）。
+正式環境請把 `APPS_URL`（`wrangler.jsonc` 的 vars）設成另一個可註冊網域，例如 `https://{name}.example-apps.com`，並讓 edge 接到那個網域。
+
+**限制**：沙箱是 Node 的權限模型，不是 VM；產生的程式碼可以對外連線（包括這台機器上其他沒有驗證的服務）。要開放給不認識的人用，請再把 rucloud 放進容器或 VM。
 
 ## 檔案
 
-- `src/worker.js` — 帳號、設定、專案 CRUD、SSE 對話（串流轉發 + 版本儲存）、`Files` RPC（給 app-runner）、zip 打包（含自製 ZIP 寫入器）
-- `runner/` — app-runner：執行產生的 app（`/apps/:id/`），每個全端專案一個 SQLite Durable Object 當它的 D1
-- `rucloud.toml` — 一起跑 app-builder 與 app-runner
+- `src/worker.js` — 帳號、設定、專案 CRUD、SSE 對話（串流轉發 + 版本儲存）、部署到 rucloud（自製 tar.gz）、zip 打包（含自製 ZIP 寫入器）
+- `rucloud.toml` — 單獨跑 app-builder 的設定（`[edge]`、`[admin]`、`[dynamic]`）
 - `public/index.html` — 單檔 SPA（登入 → 專案列表 → 聊天 + 預覽 + 版本 + 設定）
 - `schema.sql` — `users` / `settings` / `projects` / `messages` / `versions` / `version_files`（Worker 啟動時也會冪等地自行建表與補欄位）
 - `.dev.vars.example` — 範本；`.dev.vars` 已被 .gitignore 排除，金鑰不進版控
@@ -66,6 +70,6 @@ flowchart LR
 - 密碼 PBKDF2（10 萬次）+ 每人隨機 salt；session 是 HMAC 簽章的 cookie，不洩漏存在性
 - API Key 只進 D1，API 回應只給 `hasKey` 與末 4 碼
 - 專案與訊息有 user_id 歸屬檢查；產生的 app 則是刻意公開（方便分享成品）
-- 產生的程式碼在 app-runner 執行（見上面的「架構」），碰不到帳號、密碼與金鑰
+- 產生的程式碼在自己的 rucloud 應用裡執行（見上面的「架構」），碰不到帳號、密碼、金鑰與其他專案
 - 會改資料的 API 只接受同一個來源的請求（檢查 `Sec-Fetch-Site` / `Origin`），產生的頁面不能冒用登入身分呼叫
 - 預覽的 iframe 加上 `sandbox`（不能把上層頁面導走）

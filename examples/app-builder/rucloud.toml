@@ -1,16 +1,20 @@
-# app-builder 與執行產生 app 的 app-runner 一起跑：rucloud serve examples/app-builder/rucloud.toml
+# 單獨跑 app-builder：rucloud serve examples/app-builder/rucloud.toml
 #   app-builder：http://localhost:8717
-#   app-runner ：http://127.0.0.1:8719（主機名稱必須和 app-builder 不同，見 README）
+#   產生的 app ：http://gen-<專案id>.localhost:8700（每個專案是一個獨立的應用）
 state_dir = "../../.rucloud"
+
+[edge]
+port = 8700
+
+# 管理介面：http://127.0.0.1:8799；token 自動產生在 ../../.rucloud/admin-token
+[admin]
+port = 8799
+
+# 產生的專案在執行中新增成獨立的應用；app-builder 透過 grant 拿到部署用的網址與 token
+[dynamic]
+grant = ["app-builder"]
 
 [[app]]
 path = "."
 port = 8717
 d1_init = { DB = "schema.sql" }
-
-[[app]]
-path = "runner"
-port = 8719
-# 產生的程式碼卡住（例如無窮迴圈）5 秒就重開 runner，不影響 app-builder
-max_block_ms = 5000
-memory_mb = 256
