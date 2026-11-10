@@ -1,0 +1,8 @@
+// Leaflet 釘選地圖：點地圖存釘選（D1）
+{
+  "name": "map",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "map-db", "database_id": "local" }]
+}

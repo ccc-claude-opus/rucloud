@@ -1,0 +1,1 @@
+cargo run --release -- serve examples/rucloud.toml

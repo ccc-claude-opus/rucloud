@@ -119,6 +119,8 @@ flowchart LR
 | [examples/chat](examples/chat) | WebSocket 聊天室：每個房間一個 SQLite 型 Durable Object（hibernation API + `ctx.storage.sql`） | <http://localhost:8713> |
 | [examples/myshop](examples/myshop) | 個人商店 POS：D1、HMAC cookie、PBKDF2（取自 test-apps） | <http://localhost:8711> |
 | [examples/friendbook](examples/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
+| [examples/markpedia](examples/markpedia) | Markdown 維基百科：D1 + Assets，三層分類樹（9 學門 / 36 次分類 / 111 條目）（取自 test-apps） | <http://localhost:8714> |
+| [examples/map](examples/map) | [Leaflet](https://leafletjs.com/) 釘選地圖：點地圖新增釘選，資料存 D1 | <http://localhost:8715> |
 
 ```bash
 rucloud serve examples/rucloud.toml

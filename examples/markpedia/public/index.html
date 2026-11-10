@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Markpedia</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <header>
+    <a href="#/" id="logo">Markpedia</a>
+    <form id="search-form">
+      <input id="search-input" type="search" placeholder="搜尋條目…" autocomplete="off">
+    </form>
+    <a href="#/new" id="new-link">新增</a>
+    <a href="#/admin" id="admin-link">管理員</a>
+  </header>
+  <main id="app" aria-live="polite">載入中…</main>
+  <footer>
+    <a href="#/">入口頁</a> · <a href="#/admin">管理員</a> · <a href="#/new">新增條目</a> · <a href="#" id="random-link">隨機條目</a> · <a href="#/p/markpedia">關於本站</a>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "markpedia",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db": "wrangler d1 execute markpedia-db --local --file=schema.sql",
+    "db-remote": "wrangler d1 execute markpedia-db --remote --file=schema.sql"
+  },
+  "devDependencies": {
+    "wrangler": "^4"
+  }
+}

@@ -1,0 +1,26 @@
+// wrangler 設定：https://developers.cloudflare.com/workers/wrangler/configuration/
+// 部署前先執行下面兩行建立資料庫，並把輸出的 database_id 填到下面：
+//   npx wrangler d1 create markpedia-db
+//   npx wrangler d1 execute markpedia-db --remote --file=schema.sql
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "markpedia",
+	"main": "src/worker.js",
+	"compatibility_date": "2025-11-01",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "markpedia-db",
+			"database_id": "e610a89e-e4dd-4650-9d31-b02f5e314f86"
+		}
+	],
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		// 只有 /api/* 先進 Worker，靜態檔（含 seed 範例）直接由 Assets 提供
+		"run_worker_first": ["/api/*"]
+	},
+	"observability": {
+		"enabled": true
+	}
+}

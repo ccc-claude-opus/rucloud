@@ -1,0 +1,173 @@
+/* markpedia：維基風格的簡潔樣式 */
+:root {
+  --fg: #202122;
+  --muted: #54595d;
+  --link: #3366cc;
+  --border: #a2a9b1;
+  --bg: #f8f9fa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, 'Noto Sans TC', 'Helvetica Neue', Arial, sans-serif;
+  color: var(--fg);
+  background: #fff;
+  line-height: 1.75;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: #fff;
+  z-index: 5;
+}
+
+#logo { font-weight: 700; font-size: 20px; text-decoration: none; color: var(--fg); white-space: nowrap; }
+#new-link { white-space: nowrap; font-size: 14px; }
+
+#search-form { flex: 1; }
+#search-input {
+  width: 100%;
+  max-width: 480px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.page { max-width: 860px; margin: 0 auto; padding: 24px 16px 60px; }
+
+h1, h2, h3 { line-height: 1.3; }
+#app h1 { font-size: 28px; border-bottom: 1px solid #eaecf0; padding-bottom: 8px; }
+
+/* 入口頁：學門／次分類的表格 */
+.chip {
+  display: inline-block;
+  padding: 1px 12px;
+  margin-right: 6px;
+  border: 1px solid var(--link);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.chip.active { background: var(--link); color: #fff; }
+.chip.ghost { border-color: var(--border); color: var(--muted); }
+.lang-tabs { margin-bottom: 6px; }
+
+.meta { color: var(--muted); font-size: 14px; }
+
+.entry-list { list-style: none; padding: 0; }
+.entry-list li { padding: 10px 0; border-bottom: 1px solid #eaecf0; }
+.entry-list .title-link { font-size: 17px; font-weight: 600; }
+.entry-list .meta { margin-left: 8px; }
+
+button, .btn {
+  font-size: 14px;
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--fg);
+  display: inline-block;
+}
+button:hover, .btn:hover { text-decoration: none; background: #eef2ff; }
+button.danger { color: #b32424; border-color: #b32424; background: #fff; }
+button.danger:hover { background: #fff3f3; }
+
+article { margin-top: 18px; overflow-wrap: break-word; }
+article table, .preview table { border-collapse: collapse; margin: 16px 0; }
+article th, article td, .preview th, .preview td { border: 1px solid #c8ccd1; padding: 6px 12px; }
+article th, .preview th { background: var(--bg); }
+article pre, .preview pre { background: var(--bg); padding: 12px; border-radius: 6px; overflow: auto; }
+article code, .preview code {
+  background: rgba(27, 31, 35, .06);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: .92em;
+}
+article pre code, .preview pre code { background: none; padding: 0; }
+article blockquote {
+  border-left: 4px solid var(--border);
+  margin: 12px 0;
+  padding: 2px 16px;
+  color: var(--muted);
+}
+article img, .preview img { max-width: 100%; }
+.katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.mermaid-box { text-align: center; margin: 14px 0; }
+.mermaid-box svg { max-width: 100%; }
+.mermaid-error {
+  color: #b32424;
+  background: #fff3f3;
+  padding: 10px;
+  white-space: pre-wrap;
+  font-size: 13px;
+}
+
+form { display: flex; flex-direction: column; gap: 6px; max-width: 860px; }
+form label { font-weight: 600; margin-top: 10px; font-size: 14px; }
+form input, form textarea, form select {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  width: 100%;
+}
+form textarea {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+form .row { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
+
+.error { color: #b32424; }
+.muted { color: var(--muted); font-size: 13px; }
+
+.preview {
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  margin-top: 20px;
+}
+
+/* 入口頁：學門／次分類的表格 */
+.portal-table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0 24px;
+}
+.portal-table th, .portal-table td {
+  border: 1px solid #c8ccd1;
+  padding: 10px 14px;
+  vertical-align: top;
+  text-align: left;
+}
+.portal-table thead th { background: var(--bg); font-weight: 600; }
+.portal-table tbody th {
+  width: 5em;
+  background: var(--bg);
+  text-align: center;
+  font-size: 22px;
+  white-space: nowrap;
+}
+.portal-table tbody th a { color: var(--fg); text-decoration: none; }
+.portal-table tbody th a:hover { color: var(--link); text-decoration: underline; }
+.portal-table td a { margin-right: 2px; }
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 14px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}

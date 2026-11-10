@@ -30,3 +30,15 @@ d1_init = { DB = "schema.sql" }
 path = "chat"
 port = 8713
 instances = 2
+
+# 維基百科式的 Markdown 知識庫（D1 + Assets）
+[[app]]
+path = "markpedia"
+port = 8714
+d1_init = { DB = "schema.sql" }
+
+# Leaflet 釘選地圖（D1 + Assets）
+[[app]]
+path = "map"
+port = 8715
+d1_init = { DB = "schema.sql" }
