@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AppForge — AI 網站產生器</title>
+<style>
+:root {
+  --bg:#0d1017; --panel:#151a24; --card:#1a2029; --bd:#2a3242; --fg:#e8ecf3; --mut:#8b95a7;
+  --ac:#6d8bff; --ac2:#8b6dff; --ok:#4ade80; --no:#f87171; --user:#243b6b;
+}
+* { box-sizing:border-box; margin:0 }
+body { background:var(--bg); color:var(--fg); font:14px/1.65 system-ui,-apple-system,"Noto Sans TC",sans-serif; height:100vh; display:flex; flex-direction:column; overflow:hidden }
+button,select,input,textarea { font:inherit; color:var(--fg); background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:7px 12px }
+button { cursor:pointer } button:hover { border-color:var(--ac) } button.p { background:var(--ac); border-color:var(--ac); color:#0d1017; font-weight:600 }
+button:disabled { opacity:.5; cursor:default }
+.hidden { display:none!important }
+.mut { color:var(--mut); font-size:12px }
+
+/* ---------- 登入 ---------- */
+#auth { margin:auto; width:360px; background:var(--panel); border:1px solid var(--bd); border-radius:14px; padding:28px }
+#auth h1 { font-size:22px; margin-bottom:4px } #auth .logo { font-size:30px }
+#auth p { margin-bottom:16px } #auth input { width:100%; margin-bottom:10px; padding:9px 12px }
+#auth button { width:100%; padding:9px; margin-top:4px }
+#auth .switch { text-align:center; margin-top:12px; color:var(--mut) }
+#auth .switch a { color:var(--ac); cursor:pointer }
+#aerr { color:var(--no); min-height:20px; margin:4px 0 }
+
+/* ---------- 主畫面 ---------- */
+#main { display:flex; flex-direction:column; height:100vh }
+header { display:flex; gap:10px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--bd); background:var(--panel) }
+header h1 { font-size:16px } header .sp { flex:1 }
+#cols { flex:1; display:flex; min-height:0 }
+#side { width:230px; border-right:1px solid var(--bd); background:var(--panel); display:flex; flex-direction:column; padding:10px }
+#side .new { margin-bottom:10px }
+#plist { flex:1; overflow-y:auto }
+#plist div { padding:8px 10px; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; gap:6px; align-items:center }
+#plist div:hover { background:var(--card) }
+#plist div.on { background:var(--user) }
+#plist .del { border:0; background:none; color:var(--mut); padding:0 4px } #plist .del:hover { color:var(--no) }
+#plist .nm { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+
+#work { flex:1; display:flex; min-width:0 }
+#chat { width:44%; min-width:340px; border-right:1px solid var(--bd); display:flex; flex-direction:column; background:var(--panel) }
+#msgs { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px }
+.bubble { max-width:88%; padding:9px 12px; border-radius:12px; white-space:pre-wrap; word-break:break-word; font-size:13px }
+.bubble.user { align-self:flex-end; background:var(--user) }
+.bubble.ai { align-self:flex-start; background:var(--card); border:1px solid var(--bd) }
+.bubble.ai.thinking { color:var(--mut) }
+.bubble .ver { color:var(--ac); font-weight:600; font-size:12px; display:block; margin-top:6px }
+.bubble.err { border-color:var(--no); color:var(--no) }
+#inbar { padding:10px; border-top:1px solid var(--bd); display:flex; gap:8px }
+#prompt { flex:1; resize:none; height:56px }
+#prev { flex:1; display:flex; flex-direction:column; min-width:0 }
+#ptabs { display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid var(--bd); align-items:center; flex-wrap:wrap }
+#ptabs button { padding:5px 12px; font-size:13px } #ptabs button.on { background:var(--ac); border-color:var(--ac); color:#0d1017; font-weight:600 }
+#ptabs select { padding:4px 8px; font-size:13px }
+#frame-wrap { flex:1; position:relative; background:#fff }
+#frame { position:absolute; inset:0; width:100%; height:100%; border:0 }
+#code { flex:1; overflow:auto; padding:12px; font:12px/1.5 ui-monospace,Menlo,monospace; white-space:pre; background:#0b0e14 }
+#empty { margin:auto; text-align:center; max-width:520px; padding:30px }
+#empty h2 { margin:10px 0 16px }
+#bigprompt { width:100%; height:90px; resize:none; padding:12px; margin-bottom:10px }
+.chips { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:14px }
+.chips button { font-size:12px; padding:5px 10px; border-radius:99px }
+
+/* ---------- 設定 modal ---------- */
+#mask { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:10 }
+#modal { width:440px; background:var(--panel); border:1px solid var(--bd); border-radius:14px; padding:22px }
+#modal h3 { margin-bottom:14px } #modal label { display:block; margin:10px 0 4px; font-size:13px }
+#modal input, #modal select { width:100%; padding:8px 10px }
+#modal .row2 { display:flex; gap:8px; justify-content:flex-end; margin-top:16px }
+#serr { color:var(--no); min-height:18px; margin-top:8px }
+</style>
+</head>
+<body>
+
+<div id="auth" class="hidden">
+  <h1><span class="logo">⚡</span> AppForge</h1>
+  <p class="mut">用一句話，讓 AI 幫你做出可以部署的網站</p>
+  <div id="aerr"></div>
+  <input id="email" placeholder="email" autocomplete="username">
+  <input id="pass" type="password" placeholder="密碼（至少 6 字）" autocomplete="current-password">
+  <button class="p" id="go">登入</button>
+  <div class="switch">還沒有帳號？<a id="tog">註冊</a></div>
+</div>
+
+<div id="main" class="hidden">
+  <header>
+    <h1>⚡ AppForge</h1>
+    <span class="mut" id="pname"></span>
+    <div class="sp"></div>
+    <span class="mut" id="who"></span>
+    <button id="settings">⚙ AI 設定</button>
+    <button id="logout">登出</button>
+  </header>
+  <div id="cols">
+    <nav id="side">
+      <button class="new" id="newp" style="width:100%">＋ 新專案</button>
+      <div id="plist"></div>
+      <div class="mut">產生的網站在 /apps/<id><br>公開、可直接分享</div>
+    </nav>
+    <div id="work">
+      <div id="chat">
+        <div id="msgs"></div>
+        <div id="inbar">
+          <textarea id="prompt" placeholder="描述你想做的網站，或要怎麼修改…（Ctrl+Enter 送出）"></textarea>
+          <button class="p" id="send">送出</button>
+        </div>
+      </div>
+      <div id="prev">
+        <div id="ptabs">
+          <button data-v="view" class="on">預覽</button>
+          <button data-v="code">程式碼</button>
+          <select id="vsel" title="版本"></select>
+          <a id="open" target="_blank" style="font-size:13px;color:var(--ac)">↗ 開新分頁</a>
+          <a id="dl" style="font-size:13px;color:var(--ac)">⬇ 下載 zip</a>
+        </div>
+        <div id="frame-wrap"><iframe id="frame" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe><pre id="code" class="hidden"></pre></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="mask" class="hidden">
+  <div id="modal">
+    <h3>⚙ AI 設定</h3>
+    <label>供應商</label><select id="s-prov"></select>
+    <label>模型（留空用預設）</label><input id="s-model" placeholder="">
+    <label id="s-basel">Base URL（OpenAI 相容）</label><input id="s-base" placeholder="https://example.com/v1">
+    <label>API Key</label><input id="s-key" type="password" placeholder="">
+    <div class="mut" id="s-note"></div>
+    <div id="serr"></div>
+    <div class="row2"><button id="s-clear">清除金鑰</button><button id="s-cancel">取消</button><button class="p" id="s-save">儲存</button></div>
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"' }[c]));
+
+let me = null, projects = [], cur = null, curData = null, mode = 'view', reg = false, busy = false;
+
+const api = async (path, opts = {}) => {
+  const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || r.statusText);
+  return d;
+};
+
+/* ---------- 帳號 ---------- */
+function showAuth() { $('#auth').classList.remove('hidden'); $('#main').classList.add('hidden'); }
+function showMain() { $('#auth').classList.add('hidden'); $('#main').classList.remove('hidden'); $('#who').textContent = me.user.email; }
+
+$('#tog').onclick = () => {
+  reg = !reg;
+  $('#go').textContent = reg ? '註冊' : '登入';
+  $('#tog').textContent = reg ? '登入' : '註冊';
+};
+$('#go').onclick = async () => {
+  $('#aerr').textContent = '';
+  try {
+    await api(reg ? '/api/register' : '/api/login', { method: 'POST', body: JSON.stringify({ email: $('#email').value, password: $('#pass').value }) });
+    await boot();
+  } catch (e) { $('#aerr').textContent = e.message; }
+};
+$('#pass').addEventListener('keydown', (e) => e.key === 'Enter' && $('#go').click());
+$('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); me = null; showAuth(); };
+
+/* ---------- 專案 ---------- */
+async function loadProjects() {
+  projects = (await api('/api/projects')).projects;
+  $('#plist').innerHTML = projects.map((p) =>
+    `<div data-id="${p.id}" class="${cur === p.id ? 'on' : ''}"><span class="nm">${esc(p.name)}</span><button class="del" data-del="${p.id}" title="刪除">✕</button></div>`).join('') || '<div class="mut">還沒有專案</div>';
+}
+$('#plist').onclick = async (e) => {
+  const del = e.target.closest('[data-del]');
+  if (del) {
+    e.stopPropagation();
+    if (confirm('確定刪除這個專案？')) { await api('/api/projects/' + del.dataset.del, { method: 'DELETE' }); if (cur === +del.dataset.del) { cur = null; curData = null; render(); } await loadProjects(); }
+    return;
+  }
+  const d = e.target.closest('[data-id]');
+  if (d) openProject(+d.dataset.id);
+};
+$('#newp').onclick = () => { cur = null; curData = null; render(); $('#prompt').focus(); };
+
+async function openProject(id) {
+  cur = id; await loadProjects(); await refreshProject(); render();
+}
+
+async function refreshProject() {
+  curData = await api('/api/projects/' + cur);
+  $('#pname').textContent = curData.project.name;
+  const v = curData.latest;
+  $('#vsel').innerHTML = curData.versions.map((x) => `<option value="${x.version}">v${x.version}（${(x.bytes / 1024).toFixed(1)} KB）</option>`).join('') || '<option value="">尚無版本</option>';
+  $('#vsel').value = v || '';
+  $('#open').href = v ? `/apps/${cur}?v=${v}` : '#';
+  $('#dl').href = v ? `/api/projects/${cur}/download?v=${v}` : '#';
+  if (mode === 'view') setFrame(v);
+  else loadCode();
+}
+
+function setFrame(v) {
+  $('#frame').src = v ? `/apps/${cur}?v=${v}&r=${Date.now()}` : 'about:blank';
+}
+async function loadCode() {
+  if (!curData?.latest) { $('#code').textContent = '（還沒有版本）'; return; }
+  const row = await api(`/api/projects/${cur}/versions/${$('#vsel').value || curData.latest}`);
+  $('#code').textContent = row.html;
+}
+$('#vsel').onchange = () => { mode === 'view' ? setFrame(+$('#vsel').value) : loadCode(); $('#open').href = `/apps/${cur}?v=${$('#vsel').value}`; $('#dl').href = `/api/projects/${cur}/download?v=${$('#vsel').value}`; };
+$('#ptabs').onclick = (e) => {
+  const b = e.target.closest('[data-v]'); if (!b) return;
+  mode = b.dataset.v;
+  document.querySelectorAll('#ptabs [data-v]').forEach((x) => x.classList.toggle('on', x === b));
+  $('#frame-wrap').parentElement.querySelector('#frame').style.display = mode === 'view' ? '' : 'none';
+  $('#code').classList.toggle('hidden', mode !== 'code');
+  if (mode === 'code') loadCode(); else setFrame(+$('#vsel').value || curData?.latest);
+};
+
+/* ---------- 聊天 ---------- */
+function bubble(cls, text) {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + cls;
+  if (text != null) d.textContent = text;
+  $('#msgs').append(d);
+  $('#msgs').scrollTop = 1e9;
+  return d;
+}
+
+function render() {
+  const has = !!curData;
+  $('#work').querySelectorAll('#chat,#prev').forEach((el) => el.classList.toggle('hidden', !has));
+  let empty = $('#empty');
+  if (!has) {
+    if (!empty) {
+      empty = document.createElement('div'); empty.id = 'empty';
+      $('#work').prepend(empty);
+    }
+    empty.innerHTML = `<div style="font-size:40px">⚡</div><h2>你想做一個什麼網站？</h2>
+      <textarea id="bigprompt" placeholder="例如：一個記帳小工具，可以輸入支出、看每月統計圖表，風格要可愛"></textarea>
+      <button class="p" id="biggo" style="width:100%;padding:10px">✨ 開始建造</button>
+      <div class="chips">
+        <button data-x="一個番茄鐘計時器，有開始/暫停、可設定分鐘數、完成時播放音效">🍅 番茄鐘</button>
+        <button data-x="一個 Markdown 筆記本，左邊編輯右邊即時預覽，筆記存 localStorage">📝 Markdown 筆記</button>
+        <button data-x="一個畫板 app，可以選顏色、粗細，畫完下載成 PNG">🎨 小畫板</button>
+        <button data-x="一個匯率換算與小費計算機，介面要精美">💱 換算機</button>
+      </div>`;
+    empty.querySelector('#biggo').onclick = () => createFrom(empty.querySelector('#bigprompt').value);
+    empty.querySelectorAll('[data-x]').forEach((b) => (b.onclick = () => { empty.querySelector('#bigprompt').value = b.dataset.x; }));
+  } else if (empty) { empty.remove(); }
+  if (has) {
+    $('#msgs').innerHTML = '';
+    for (const m of curData.messages) {
+      const b = bubble(m.role === 'user' ? 'user' : 'ai', m.content);
+      if (m.role === 'assistant' && m.version) {
+        const tag = document.createElement('span');
+        tag.className = 'ver'; tag.textContent = `✓ 已產生 v${m.version}`;
+        b.append(tag);
+      }
+    }
+    if (!curData.messages.length) bubble('ai thinking', '描述你的網站需求，AI 會直接產出第一個版本！');
+  }
+}
+
+async function createFrom(prompt) {
+  if (!prompt.trim()) return;
+  const p = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: prompt.slice(0, 30) }) });
+  cur = p.id; await loadProjects();
+  curData = { project: p, messages: [], versions: [], latest: null };
+  render();
+  sendChat(prompt);
+}
+
+async function sendChat(text) {
+  if (busy || !text.trim()) return;
+  busy = true; $('#send').disabled = true;
+  bubble('user', text);
+  const ai = bubble('ai thinking', '…建造中（模型思考與產生程式碼需要一點時間）');
+  let acc = '';
+  try {
+    const r = await fetch(`/api/projects/${cur}/chat`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: text }),
+    });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = '', errored = null, version = null;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const parts = buf.split('\n\n'); buf = parts.pop();
+      for (const part of parts) {
+        if (!part.startsWith('data:')) continue;
+        const ev = JSON.parse(part.slice(5));
+        if (ev.t === 'c') { acc += ev.x; ai.classList.remove('thinking'); ai.textContent = acc; $('#msgs').scrollTop = 1e9; }
+        if (ev.t === 'r') { ai.classList.add('thinking'); ai.textContent = '🤔 思考中：' + (ev.x.slice(-160)); $('#msgs').scrollTop = 1e9; }
+        if (ev.t === 'done') version = ev.version;
+        if (ev.t === 'err') errored = ev.e;
+      }
+    }
+    if (errored) { ai.classList.add('err'); ai.textContent = '⚠ ' + errored; }
+    else if (version) {
+      ai.innerHTML = '';
+      const pre = document.createElement('span'); pre.textContent = acc.replace(/<APP>[\s\S]*<\/APP>/, '');
+      const tag = document.createElement('span'); tag.className = 'ver'; tag.textContent = `✓ 已產生 v${version}，右邊可預覽`;
+      ai.append(pre, tag);
+    }
+    await refreshProject();
+  } catch (e) {
+    ai.classList.add('err'); ai.textContent = '⚠ ' + e.message;
+  }
+  busy = false; $('#send').disabled = false;
+  $('#prompt').value = ''; $('#prompt').focus();
+}
+
+$('#send').onclick = () => sendChat($('#prompt').value);
+$('#prompt').addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') sendChat($('#prompt').value); });
+
+/* ---------- AI 設定 ---------- */
+function fillSettings() {
+  $('#s-prov').innerHTML = me.providers.map((p) => {
+    const tag = p.hasEnvKey ? '（伺服器已備金鑰）' : '';
+    return `<option value="${p.id}">${p.name}${tag}</option>`;
+  }).join('');
+  const s = me.settings;
+  $('#s-prov').value = s.provider;
+  $('#s-model').value = s.model; $('#s-model').placeholder = me.providers.find((p) => p.id === s.provider)?.model || '';
+  $('#s-base').value = s.baseUrl;
+  $('#s-key').value = ''; $('#s-key').placeholder = s.hasKey ? `已儲存（…${s.keyTail}，留空不變）` : '貼上供應商的 API Key';
+  updNote();
+}
+function updNote() {
+  const p = me.providers.find((x) => x.id === $('#s-prov').value);
+  $('#s-basel').style.display = $('#s-prov').value === 'custom' ? '' : 'none';
+  $('#s-note').textContent = p
+    ? `預設模型：${p.model || '自訂'}。${p.hasEnvKey ? '此伺服器已提供測試金鑰，留空即可使用。' : '若不填 key 會無法使用。'}`
+    : '';
+}
+$('#s-prov').onchange = () => { $('#s-model').placeholder = me.providers.find((p) => p.id === $('#s-prov').value)?.model || ''; updNote(); };
+$('#settings').onclick = () => { fillSettings(); $('#mask').classList.remove('hidden'); };
+$('#s-cancel').onclick = () => $('#mask').classList.add('hidden');
+$('#s-clear').onclick = async () => { me = await api('/api/settings', { method: 'PUT', body: JSON.stringify({ clearKey: true }) }); fillSettings(); };
+$('#s-save').onclick = async () => {
+  $('#serr').textContent = '';
+  try {
+    me = await api('/api/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ provider: $('#s-prov').value, model: $('#s-model').value, baseUrl: $('#s-base').value, apiKey: $('#s-key').value }),
+    });
+    $('#mask').classList.add('hidden');
+  } catch (e) { $('#serr').textContent = e.message; }
+};
+
+/* ---------- 啟動 ---------- */
+async function boot() {
+  try { me = await api('/api/me'); } catch { showAuth(); return; }
+  showMain(); await loadProjects(); render();
+}
+boot();
+</script>
+</body>
+</html>

@@ -121,6 +121,8 @@ flowchart LR
 | [examples/friendbook](examples/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
 | [examples/markpedia](examples/markpedia) | Markdown 維基百科：D1 + Assets，三層分類樹（9 學門 / 36 次分類 / 111 條目）（取自 test-apps） | <http://localhost:8714> |
 | [examples/map](examples/map) | [Leaflet](https://leafletjs.com/) 釘選地圖：點地圖新增釘選，資料存 D1 | <http://localhost:8715> |
+| [examples/music](examples/music) | 音樂學習：樂理教室、聽力訓練、跟彈歌曲、Web MIDI 虛擬鋼琴，成績存 D1 | <http://localhost:8716> |
+| [examples/app-builder](examples/app-builder) | AI 網站產生器（Lovable 式）：帳號、AI 對話串流、產出可部署的靜態網站（D1 + AI） | <http://localhost:8717> |
 
 ```bash
 rucloud serve examples/rucloud.toml

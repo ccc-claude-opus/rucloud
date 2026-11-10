@@ -1,0 +1,13 @@
+// 棋藝軒：經典棋類與桌遊對戰平台（移植自 AI Studio 的 boardgame-arena）
+// 前端：React + Vite（build 後放 public/）
+// 後端：單一 SQLite 型 Durable Object（Arena）負責房間、聊天、ELO 排行，
+//       WebSocket 用 hibernation API，狀態存 ctx.storage.sql，重啟不遺失。
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "boardgame",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/ws"] },
+  "durable_objects": { "bindings": [{ "name": "ARENA", "class_name": "Arena" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Arena"] }]
+}

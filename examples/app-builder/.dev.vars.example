@@ -1,0 +1,7 @@
+# 複製成 .dev.vars（已被 .gitignore 排除，不會進版控）並填入自己的值
+AUTH_SECRET=請換成隨機長字串
+
+# 選填：不填的話，使用者必須在網站的「AI 設定」填自己的 key
+# 正式部署到 Cloudflare 時用 wrangler secret put NVIDIA_API_KEY / MINIMAX_API_KEY
+NVIDIA_API_KEY=
+MINIMAX_API_KEY=

@@ -42,3 +42,20 @@ d1_init = { DB = "schema.sql" }
 path = "map"
 port = 8715
 d1_init = { DB = "schema.sql" }
+
+# 音樂學習：樂理、聽力訓練、跟彈、Web MIDI（D1 + Assets）
+[[app]]
+path = "music"
+port = 8716
+d1_init = { DB = "schema.sql" }
+
+# AI 網站產生器（Lovable 式：帳號 + AI 對話 + 產出靜態網站；金鑰在 .dev.vars 或使用者自填）
+[[app]]
+path = "app-builder"
+port = 8717
+d1_init = { DB = "schema.sql" }
+
+# 棋藝軒：棋類桌遊對戰平台（Durable Object + WebSocket hibernation，React 前端）
+[[app]]
+path = "boardgame"
+port = 8718

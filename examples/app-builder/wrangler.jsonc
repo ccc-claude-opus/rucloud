@@ -1,0 +1,8 @@
+// app-builder：AI 網站產生器（rucloud / Cloudflare 皆可跑）
+{
+  "name": "app-builder",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*", "/apps/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "app-builder-db", "database_id": "local" }]
+}
