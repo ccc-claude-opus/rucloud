@@ -1,0 +1,8 @@
+// 音樂學習：樂理、聽力訓練、跟彈、Web MIDI，練習成績存 D1
+{
+  "name": "music",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
+  "d1_databases": [{ "binding": "DB", "database_name": "music-db", "database_id": "local" }]
+}

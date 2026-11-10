@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>琴鍵實驗室：樂理・彈琴・MIDI</title>
+    <style>
+        :root {
+            box-sizing: border-box;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            --bg: #f3f4f9;
+            --fg: #171a2b;
+            --mut: #666b85;
+            --card: #fff;
+            --bd: #d9dcea;
+            --ac: #4338ca;
+            --sel: #c7d2fe;
+            --root: #818cf8;
+            --wk: #fff;
+            --bk: #171a2b;
+            --hl: #f59e0b
+        }
+
+        @media (prefers-color-scheme:dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #10121c;
+                --fg: #e8eaf6;
+                --mut: #9aa0c0;
+                --card: #1a1d2e;
+                --bd: #2e3250;
+                --ac: #818cf8;
+                --sel: #3b3f8f;
+                --root: #6366f1;
+                --wk: #eceef8;
+                --bk: #05060c
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --bg: #10121c;
+            --fg: #e8eaf6;
+            --mut: #9aa0c0;
+            --card: #1a1d2e;
+            --bd: #2e3250;
+            --ac: #818cf8;
+            --sel: #3b3f8f;
+            --root: #6366f1;
+            --wk: #eceef8;
+            --bk: #05060c
+        }
+
+        html {
+            scroll-padding-top: env(safe-area-inset-top, 0px)
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--fg);
+            font: 15px/1.7 system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 14px
+        }
+
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+            letter-spacing: .02em
+        }
+
+        h2 {
+            font-size: 18px;
+            margin: 4px 0 8px
+        }
+
+        .mut {
+            color: var(--mut);
+            font-size: 13px
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--bd);
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 12px
+        }
+
+        button,
+        select,
+        input {
+            font: inherit;
+            color: var(--fg);
+            background: var(--card);
+            border: 1px solid var(--bd);
+            border-radius: 8px;
+            padding: 5px 12px;
+            cursor: pointer
+        }
+
+        button:hover {
+            border-color: var(--ac)
+        }
+
+        button:focus-visible,
+        select:focus-visible,
+        summary:focus-visible {
+            outline: 2px solid var(--ac);
+            outline-offset: 2px
+        }
+
+        button.p,
+        .tabs button.on {
+            background: var(--ac);
+            color: #fff;
+            border-color: var(--ac)
+        }
+
+        :root[data-theme="dark"] button.p,
+        :root[data-theme="dark"] .tabs button.on {
+            color: #10121c
+        }
+
+        .tabs {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            margin-top: 12px;
+            padding-bottom: 2px
+        }
+
+        .tabs button {
+            white-space: nowrap
+        }
+
+        .row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center
+        }
+
+        #now {
+            font-size: 17px;
+            font-weight: 600;
+            min-height: 30px
+        }
+
+        #scroll {
+            overflow-x: auto;
+            padding: 6px 0;
+            touch-action: pan-x
+        }
+
+        #piano {
+            position: relative;
+            height: 170px;
+            user-select: none;
+            -webkit-user-select: none
+        }
+
+        .key {
+            position: absolute;
+            top: 0;
+            cursor: pointer;
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            transition: background .08s
+        }
+
+        .key.w {
+            width: 46px;
+            height: 170px;
+            background: var(--wk);
+            border: 1px solid #7776;
+            border-radius: 0 0 6px 6px
+        }
+
+        .key.b {
+            width: 28px;
+            height: 104px;
+            background: var(--bk);
+            border-radius: 0 0 4px 4px;
+            z-index: 2
+        }
+
+        .key span {
+            font-size: 11px;
+            pointer-events: none;
+            padding-bottom: 6px;
+            color: #555
+        }
+
+        .key.b span {
+            color: #ccd;
+            font-size: 9px
+        }
+
+        .key span.kb {
+            position: absolute;
+            top: 6px;
+            padding: 0 4px;
+            min-width: 18px;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ac);
+            background: var(--sel);
+            border-radius: 4px
+        }
+
+        .key.b span.kb {
+            top: 8px;
+            color: #fff;
+            background: #4f52c9;
+            font-size: 11px
+        }
+
+        .key span.kb:empty {
+            display: none
+        }
+
+        .key.sel.w {
+            background: var(--sel)
+        }
+
+        .key.sel.b {
+            background: #4f52c9
+        }
+
+        .key.root.w {
+            background: var(--root)
+        }
+
+        .key.root.b {
+            background: #6366f1
+        }
+
+        .key.tg {
+            box-shadow: inset 0 0 0 4px var(--hl)
+        }
+
+        .key.down.w {
+            background: #fcd34d
+        }
+
+        .key.down.b {
+            background: #f59e0b
+        }
+
+        .key.bad.w,
+        .key.bad.b {
+            background: #f87171
+        }
+
+        .bar {
+            height: 8px;
+            background: var(--bd);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0
+        }
+
+        .bar i {
+            display: block;
+            height: 100%;
+            width: 0;
+            background: var(--ac);
+            transition: width .2s
+        }
+
+        .ans {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 10px 0
+        }
+
+        .ok {
+            color: #15803d;
+            font-weight: 600
+        }
+
+        .no {
+            color: #dc2626;
+            font-weight: 600
+        }
+
+        details {
+            border-top: 1px solid var(--bd);
+            padding: 8px 0
+        }
+
+        details:first-of-type {
+            border-top: 0
+        }
+
+        summary {
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 16px
+        }
+
+        details p {
+            margin: 8px 0
+        }
+
+        table {
+            border-collapse: collapse;
+            font-size: 14px
+        }
+
+        td,
+        th {
+            border: 1px solid var(--bd);
+            padding: 2px 8px;
+            text-align: center
+        }
+
+        #mlog {
+            font: 12px/1.5 ui-monospace, Menlo, monospace;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 8px;
+            min-height: 60px;
+            overflow-x: auto;
+            white-space: pre
+        }
+
+        .cof text {
+            font: 14px system-ui, sans-serif
+        }
+
+        @media (prefers-reduced-motion:reduce) {
+            * {
+                transition: none !important
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <header>
+            <div>
+                <h1>🎹 琴鍵實驗室</h1>
+                <div class="mut">點琴鍵、看和弦、練耳朵，一步步學會樂理與 MIDI　·　成績存在 rucloud（D1）</div>
+            </div>
+            <div class="row"><button id="mb">連接 MIDI 鍵盤</button><span id="mstat" class="mut"></span></div>
+        </header>
+
+        <div class="card">
+            <div id="now">按下琴鍵開始吧！</div>
+            <div id="scroll">
+                <div id="piano"></div>
+            </div>
+            <div class="row mut">
+                <label>琴鍵標籤 <select id="lb">
+                        <option value="name">音名 C D E</option>
+                        <option value="sol">唱名 Do Re Mi</option>
+                        <option value="jp">簡譜 1 2 3</option>
+                        <option value="none">不顯示</option>
+                    </select></label>
+                <label><input type="checkbox" id="kbl" checked> 琴鍵上標示電腦鍵盤字母</label>
+                <span>電腦鍵盤：A S D F G H J K L ; 為白鍵，W E T Y U O P 為黑鍵　Z／X 切換八度（<b id="oct">0</b>）</span>
+            </div>
+        </div>
+
+        <div class="tabs" id="tabs"></div>
+        <div class="card" id="panel"></div>
+    </div>
+
+    <script>
+        const $ = s => document.querySelector(s);
+        const NN = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+        const SOL = ['Do', 'Do♯', 'Re', 'Re♯', 'Mi', 'Fa', 'Fa♯', 'Sol', 'Sol♯', 'La', 'La♯', 'Si'];
+        const JP = ['1', '1♯', '2', '2♯', '3', '4', '4♯', '5', '5♯', '6', '6♯', '7'];
+        const IV = ['同度', '小二度', '大二度', '小三度', '大三度', '純四度', '三全音', '純五度', '小六度', '大六度', '小七度', '大七度', '八度'];
+        const isB = m => [1, 3, 6, 8, 10].includes(m % 12);
+        const nm = m => NN[m % 12] + (Math.floor(m / 12) - 1);
+        const rnd = n => Math.floor(Math.random() * n);
+        const ST = n => '★'.repeat(n) + '☆'.repeat(3 - n);
+
+        /* ---------- 成績（rucloud D1） ---------- */
+        const PROG = {
+            data: {},
+            load() {
+                fetch('/api/progress').then(r => r.json()).then(d => {
+                    this.data = Object.fromEntries(d.rows.map(x => [x.drill, x]));
+                    document.dispatchEvent(new Event('prog'))
+                }).catch(() => { })
+            },
+            post(drill, score) {
+                fetch('/api/progress', {
+                    method: 'POST', headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ drill, score })
+                }).then(() => this.load()).catch(() => { })
+            },
+            best(k) { const x = this.data[k]; return x ? x.best : null }
+        };
+        PROG.load();
+
+        /* ---------- 音訊 ---------- */
+        let ac, master; const voices = {};
+        function A() {
+            if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = .5; master.connect(ac.destination) }
+            if (ac.state === 'suspended') ac.resume(); return ac
+        }
+        function on(m, v = .8) {
+            A(); off(m, true); const t = ac.currentTime, f = 440 * 2 ** ((m - 69) / 12);
+            const o = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain();
+            o.type = 'triangle'; o2.type = 'sine'; o.frequency.value = f; o2.frequency.value = f * 2; g2.gain.value = .3;
+            o2.connect(g2); g2.connect(g); o.connect(g); g.connect(master);
+            g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(.45 * v, t + .01); g.gain.exponentialRampToValueAtTime(.2 * v, t + .8);
+            o.start(); o2.start(); voices[m] = { o, o2, g }
+        }
+        function off(m, quick) {
+            const x = voices[m]; if (!x) return; delete voices[m]; const t = ac.currentTime, r = quick ? .03 : .25;
+            x.g.gain.cancelScheduledValues(t); x.g.gain.setValueAtTime(Math.max(x.g.gain.value, .001), t);
+            x.g.gain.exponentialRampToValueAtTime(.0005, t + r); x.o.stop(t + r + .02); x.o2.stop(t + r + .02)
+        }
+        function tone(m, d = .5, delay = 0) {
+            setTimeout(() => {
+                on(m); const k = keys[m]; k && k.classList.add('down');
+                setTimeout(() => { off(m); k && !held.has(m) && k.classList.remove('down') }, d * 1000)
+            }, delay * 1000)
+        }
+        function play(n, chord, d) { n.forEach((m, i) => tone(m, d || (chord ? 1.4 : .4), chord ? 0 : i * .45)) }
+
+        /* ---------- 鋼琴 ---------- */
+        const LO = 48, HI = 84, W = 46, BW = 28, keys = {}, held = new Set(); let hook = null;
+        (function () {
+            const p = $('#piano'); let wi = 0;
+            for (let m = LO; m <= HI; m++) {
+                const k = document.createElement('div'); k.className = 'key ' + (isB(m) ? 'b' : 'w'); k.dataset.m = m;
+                k.style.left = (isB(m) ? wi * W - BW / 2 : wi * W) + 'px'; if (!isB(m)) wi++; k.innerHTML = '<span></span><span class="kb"></span>'; p.appendChild(k); keys[m] = k
+            }
+            p.style.width = wi * W + 'px'; $('#scroll').scrollLeft = W * 7
+        })();
+        function relabel() {
+            const v = $('#lb').value; for (const m in keys) keys[m].firstChild.textContent =
+                v === 'none' ? '' : v === 'sol' ? SOL[m % 12] : v === 'jp' ? JP[m % 12] : (NN[m % 12] + (m % 12 === 0 ? Math.floor(m / 12) - 1 : ''))
+        }
+        $('#lb').onchange = () => { relabel(); $('#lb').blur() }; relabel();
+        function setHL(sel = [], root = -1, tg = []) {
+            for (const m in keys) {
+                const c = keys[m].classList, pc = m % 12;
+                c.toggle('sel', sel.includes(pc)); c.toggle('root', pc === root && sel.includes(pc)); c.toggle('tg', tg.includes(+m))
+            }
+        }
+
+        const CH = [['', '大三和弦', [0, 4, 7], '明亮、開朗、穩定'], ['m', '小三和弦', [0, 3, 7], '柔和、帶點憂傷'], ['dim', '減三和弦', [0, 3, 6], '緊張、不穩定'],
+        ['aug', '增三和弦', [0, 4, 8], '夢幻、懸疑'], ['sus2', '掛二和弦', [0, 2, 7], '空靈、開闊'], ['sus4', '掛四和弦', [0, 5, 7], '渴望解決回大三和弦'],
+        ['maj7', '大七和弦', [0, 4, 7, 11], '浪漫、都會感'], ['7', '屬七和弦', [0, 4, 7, 10], '有張力，想回到主和弦'], ['m7', '小七和弦', [0, 3, 7, 10], '溫柔、爵士感']];
+        const SC = [['', '大調音階', [0, 2, 4, 5, 7, 9, 11], '明亮、快樂，就是 Do Re Mi Fa Sol La Si'], ['', '自然小調音階', [0, 2, 3, 5, 7, 8, 10], '憂傷、深沉'],
+        ['', '和聲小調音階', [0, 2, 3, 5, 7, 8, 11], '帶異國風情，第七音升高半音'], ['', '大調五聲音階', [0, 2, 4, 7, 9], '只有 5 個音，怎麼彈都好聽（民謠、國樂）'],
+        ['', '小調五聲音階', [0, 3, 5, 7, 10], '搖滾與藍調獨奏的基礎'], ['', '藍調音階', [0, 3, 5, 6, 7, 10], '小調五聲加一個「藍調音」']];
+
+        function chordName(h) {
+            const pcs = [...new Set(h.map(m => m % 12))]; if (pcs.length < 3) return ''; const bass = h[0] % 12;
+            for (const r of pcs) {
+                const iv = pcs.map(p => (p - r + 12) % 12).sort((a, b) => a - b).join();
+                for (const c of CH) if (c[2].join() === iv) return NN[r] + c[0] + '（' + c[1] + '）' + (r !== bass ? ' ／' + NN[bass] + ' 低音' : '')
+            } return ''
+        }
+        function upd() {
+            const h = [...held].sort((a, b) => a - b); let t = '按下琴鍵開始吧！';
+            if (h.length === 1) { const m = h[0]; t = `${nm(m)}（${SOL[m % 12]}）　MIDI ${m}　${(440 * 2 ** ((m - 69) / 12)).toFixed(1)} Hz` }
+            else if (h.length > 1) {
+                const c = chordName(h); t = (c ? '和弦：' + c + '　' : '') + h.map(nm).join(' ');
+                if (h.length === 2) { const d = h[1] - h[0]; t += '　音程：' + (d > 12 ? IV[d % 12 || 12] + '＋八度' : IV[d]) }
+            }
+            $('#now').textContent = t
+        }
+        function press(m, v = .8) { if (!keys[m] || held.has(m)) return; held.add(m); on(m, v); keys[m].classList.add('down'); upd(); hook && hook(m) }
+        function release(m) { if (!held.has(m)) return; held.delete(m); off(m); keys[m].classList.remove('down'); upd() }
+
+        const pm = {};
+        $('#piano').addEventListener('pointerdown', e => { const k = e.target.closest('.key'); if (!k) return; const m = +k.dataset.m; pm[e.pointerId] = m; press(m) });
+        const up = e => { if (pm[e.pointerId] != null) { release(pm[e.pointerId]); delete pm[e.pointerId] } };
+        addEventListener('pointerup', up); addEventListener('pointercancel', up);
+
+        const KM = { a: 60, w: 61, s: 62, e: 63, d: 64, f: 65, t: 66, g: 67, y: 68, h: 69, u: 70, j: 71, k: 72, o: 73, l: 74, p: 75, ';': 76 }; let oct = 0; const dn = {};
+        addEventListener('keydown', e => {
+            if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return; const k = e.key.toLowerCase();
+            if (k === 'z' || k === 'x') { oct = Math.max(-1, Math.min(1, oct + (k === 'x' ? 1 : -1))); $('#oct').textContent = oct; kbLabel(); return }
+            if (k in KM) { const m = KM[k] + oct * 12; if (!keys[m]) return; dn[k] = m; press(m); e.preventDefault() }
+        });
+        addEventListener('keyup', e => { const k = e.key.toLowerCase(); if (dn[k] != null) { release(dn[k]); delete dn[k] } });
+        function kbLabel() {
+            for (const m in keys) keys[m].lastChild.textContent = '';
+            if ($('#kbl').checked) for (const k in KM) { const m = KM[k] + oct * 12; if (keys[m]) keys[m].lastChild.textContent = k.toUpperCase() }
+        }
+        $('#kbl').onchange = e => { kbLabel(); e.target.blur() }; kbLabel();
+
+        /* ---------- MIDI ---------- */
+        const mlog = [];
+        function logMidi(s) { mlog.unshift(s); mlog.length = Math.min(mlog.length, 7); const el = $('#mlog'); if (el) el.textContent = mlog.join('\n') }
+        function midiMsg(e) {
+            const [s, d1, d2] = e.data, t = s & 240, c = (s & 15) + 1;
+            if (t === 144 && d2 > 0) { logMidi(`Note On   頻道${c}  音符 ${d1}（${nm(d1)}）  力度 ${d2}`); press(d1, d2 / 127) }
+            else if (t === 128 || t === 144) { logMidi(`Note Off  頻道${c}  音符 ${d1}（${nm(d1)}）`); release(d1) }
+            else if (t === 176) logMidi(`控制器    頻道${c}  CC${d1} = ${d2}${d1 === 64 ? '（延音踏板）' : ''}`);
+            else if (t < 240) logMidi(`其他訊息  ${[...e.data].join(' ')}`)
+        }
+        $('#mb').onclick = async () => {
+            try {
+                const a = await navigator.requestMIDIAccess();
+                const bind = () => {
+                    const n = []; a.inputs.forEach(i => { i.onmidimessage = midiMsg; n.push(i.name) });
+                    $('#mstat').textContent = n.length ? '已連接：' + n.join('、') : '已授權，但沒偵測到裝置。請接上 USB 鍵盤'
+                };
+                a.onstatechange = bind; bind()
+            } catch (e) { $('#mstat').textContent = '此環境不支援 Web MIDI，請用桌面版 Chrome 或 Edge' }
+        };
+
+        /* ---------- 分頁 ---------- */
+        const TABS = [['play', '自由彈奏'], ['scale', '音階與和弦'], ['song', '跟著彈'], ['ear', '聽力訓練'], ['theory', '樂理與 MIDI']];
+        let timers = [], mt = null;
+        function go(t) {
+            hook = null; timers.forEach(clearTimeout); timers = []; if (mt) { clearInterval(mt); mt = null } setHL();
+            $('#tabs').innerHTML = TABS.map(([k, n]) => `<button class="${k === t ? 'on' : ''}" data-t="${k}">${n}</button>`).join('');
+            ({ play: playUI, scale: scaleUI, song: songUI, ear: earUI, theory: theoryUI })[t]()
+        }
+        $('#tabs').onclick = e => { const b = e.target.closest('[data-t]'); b && go(b.dataset.t) };
+        document.addEventListener('click', e => {
+            const b = e.target.closest('[data-p],[data-g]'); if (!b) return;
+            if (b.dataset.g) b.dataset.g.split('|').forEach((g, i) => g.split(',').forEach(m => tone(+m, .9, i)));
+            else play(b.dataset.p.split(',').map(Number), !!b.dataset.c)
+        });
+
+        function playUI() {
+            $('#panel').innerHTML = `<h2>自由彈奏</h2>
+<p>先熟悉琴鍵：<b>白鍵</b>是 C D E F G A B 七個音，<b>黑鍵</b>是升降音。每 12 個鍵（7 白＋5 黑）是一個八度。</p>
+<p><b>小挑戰</b>：</p>
+<ul><li>找出兩個黑鍵左邊的白鍵，那就是 <b>C（Do）</b>。</li>
+<li>同時按下 C、E、G，上方會顯示「C 大三和弦」。</li>
+<li>把 E 改成降半音的 D♯，聽聽看和弦變成什麼情緒？（小三和弦）</li>
+<li>按下任意兩個鍵，上方會告訴你它們的音程。</li></ul>
+<p class="mut">手機請直接點琴鍵（可多指同時按）。想用實體電子琴？按右上角「連接 MIDI 鍵盤」。</p>`}
+
+        function scaleUI() {
+            const P = $('#panel');
+            P.innerHTML = `<h2>音階與和弦</h2><div class="row"><label>根音 <select id="root">${NN.map((n, i) => `<option value="${i}">${n}</option>`).join('')}</select></label>
+ <label>類型 <select id="typ"><optgroup label="音階">${SC.map((s, i) => `<option value="s${i}">${s[1]}</option>`).join('')}</optgroup>
+ <optgroup label="和弦">${CH.map((s, i) => `<option value="c${i}">${s[1]}</option>`).join('')}</optgroup></select></label></div><div id="out"></div>`;
+            const show = () => {
+                const r = +$('#root').value, v = $('#typ').value, sc = v[0] === 's', d = (sc ? SC : CH)[+v.slice(1)], iv = d[2],
+                pcs = iv.map(x => (r + x) % 12), base = 60 + r, seq = iv.map(x => base + x); if (sc) seq.push(base + 12);
+                const steps = sc ? iv.concat(12).map((x, i, a) => i ? ({ 1: '半', 2: '全', 3: '1½' }[x - a[i - 1]] || x - a[i - 1]) : 0).slice(1).join('　') : iv.map(x => IV[x]).join('、');
+                setHL(pcs, r);
+                $('#out').innerHTML = `<h2>${NN[r]}${sc ? '' : d[0]} ${d[1]}</h2>
+  <p>組成音：<b>${pcs.map(p => NN[p]).join('　')}</b><br>唱名：${pcs.map(p => SOL[p]).join('　')}</p>
+  <p>${sc ? '相鄰音距離（全＝2 個半音、半＝1 個半音）' : '與根音的音程'}：${steps}</p>
+  <p>${d[3]}</p>
+  <div class="row"><button class="p" data-p="${seq}">▶ 逐音播放</button>${sc ? '' : `<button data-p="${seq}" data-c="1">▶ 同時播放</button>`}</div>
+  <p class="mut">琴鍵上的色塊就是這組音，深色是根音。換個根音試試，公式不變，只是整體平移。</p>`};
+            $('#root').onchange = $('#typ').onchange = e => { show(); e.target.blur() }; show()
+        }
+
+        /* 跟著彈：計時、錯誤計數、星級，成績存 D1 */
+        const parse = s => s.split(/\s+/).map(x => {
+            const sh = x[1] === '#';
+            return 12 * (+x[sh ? 2 : 1] + 1) + 'C D EF G A B'.indexOf(x[0]) + (sh ? 1 : 0)
+        });
+        const S = {
+            '小星星': 'C4 C4 G4 G4 A4 A4 G4 F4 F4 E4 E4 D4 D4 C4 G4 G4 F4 F4 E4 E4 D4 G4 G4 F4 F4 E4 E4 D4 C4 C4 G4 G4 A4 A4 G4 F4 F4 E4 E4 D4 D4 C4',
+            '歡樂頌': 'E4 E4 F4 G4 G4 F4 E4 D4 C4 C4 D4 E4 E4 D4 D4 E4 E4 F4 G4 G4 F4 E4 D4 C4 C4 D4 E4 D4 C4 C4',
+            '生日快樂': 'G4 G4 A4 G4 C5 B4 G4 G4 A4 G4 D5 C5 G4 G4 G5 E5 C5 B4 A4 F5 F5 E5 C5 D5 C5',
+            '給愛麗絲（開頭）': 'E5 D#5 E5 D#5 E5 B4 D5 C5 A4 C4 E4 A4 B4 E4 G#4 B4 C5'
+        };
+        let song = null, stimer = null;
+        const songStars = w => w === 0 ? 3 : w <= 3 ? 2 : 1;
+        function songUI() {
+            $('#panel').innerHTML = `<h2>跟著彈</h2><div class="row"><select id="sg">${Object.keys(S).map(k => `<option>${k}</option>`).join('')}</select>
+ <button class="p" id="rs">重新開始</button><button id="dm">▶ 聽示範</button>
+ <span class="mut">時間 <b id="tm">0.0</b> 秒　錯誤 <b id="wr">0</b>　最佳 <b id="sb">–</b></span></div>
+ <div class="bar"><i id="pg"></i></div><p id="st" style="font-size:17px;font-weight:600"></p>
+ <p class="mut">琴鍵上黃框的位置就是下一個要彈的音，彈對才會前進。0 錯誤 ★★★、3 次以內 ★★☆，最佳成績會存起來。</p>`;
+            $('#sg').onchange = () => { songBest(); startSong() };
+            $('#rs').onclick = startSong;
+            $('#dm').onclick = () => {
+                timers.forEach(clearTimeout); timers = []; const n = parse(S[$('#sg').value]);
+                n.forEach((m, i) => timers.push(setTimeout(() => tone(m, .4), i * 500))); timers.push(setTimeout(startSong, n.length * 500 + 300))
+            };
+            document.addEventListener('prog', songBest);
+            songBest(); startSong()
+        }
+        function songBest() {
+            const b = PROG.best('follow:' + $('#sg').value);
+            const el = $('#sb'); if (el) el.textContent = b ? ST(b) : '–'
+        }
+        function startSong() {
+            timers.forEach(clearTimeout); timers = []; clearInterval(stimer);
+            song = { n: parse(S[$('#sg').value]), i: 0, wrong: 0, t0: Date.now() };
+            $('#wr').textContent = 0; $('#tm').textContent = '0.0';
+            stimer = setInterval(() => { if (song && song.i < song.n.length) $('#tm').textContent = ((Date.now() - song.t0) / 1000).toFixed(1) }, 100);
+            nextT();
+            hook = m => {
+                if (!song) return; const n = song.n; if (song.i >= n.length) return;
+                if (m === n[song.i]) { song.i++; nextT() }
+                else { song.wrong++; $('#wr').textContent = song.wrong; const k = keys[m]; k.classList.add('bad'); setTimeout(() => k.classList.remove('bad'), 250) }
+            }
+        }
+        function nextT() {
+            if (!song) return;
+            const { n, i } = song; $('#pg').style.width = i / n.length * 100 + '%';
+            if (i >= n.length) {
+                clearInterval(stimer); setHL();
+                const sec = (Date.now() - song.t0) / 1000, s = songStars(song.wrong);
+                $('#st').textContent = `🎉 完成！${sec.toFixed(1)} 秒、錯 ${song.wrong} 次　${ST(s)}`;
+                PROG.post('follow:' + $('#sg').value, s);
+                song = null; return
+            }
+            setHL([], -1, [n[i]]); $('#st').textContent = `第 ${i + 1}／${n.length} 音：請彈 ${nm(n[i])}（${SOL[n[i] % 12]}）`
+        }
+
+        /* 聽力：每 10 題一回合，分數存 D1 */
+        const EI = [[7, '純五度'], [4, '大三度'], [3, '小三度'], [12, '八度'], [5, '純四度'], [2, '大二度'], [9, '大六度'], [10, '小七度'], [11, '大七度'], [1, '小二度'], [8, '小六度'], [6, '三全音']];
+        let q = null, sc = [0, 0], lv = 'a', round = { n: 0, ok: 0 };
+        function earUI() {
+            $('#panel').innerHTML = `<h2>聽力訓練</h2><div class="row"><label>難度 <select id="lv">
+ <option value="a">音程：入門（4 種）</option><option value="b">音程：進階（8 種）</option><option value="c">音程：全部（12 種）</option><option value="d">和弦：大、小、減、增</option></select></label>
+ <button class="p" id="nq">出題</button><button id="rp">再聽一次</button><span id="sc" class="mut"></span><span id="bd" class="mut"></span></div>
+ <div class="ans" id="ans"></div><p id="fb"></p>
+ <p class="mut">每 10 題是一個回合，分數（答對數 × 10）會自動存起來。小技巧：把音程跟熟悉的歌連結——純五度像〈小星星〉開頭，純四度像〈婚禮進行曲〉，八度像〈Over the Rainbow〉的「Some-where」。</p>`;
+            const bestEl = () => {
+                const b = PROG.best('ear:' + lv); $('#bd').textContent = b != null ? `回合最佳 ${b} 分` : ''
+            };
+            document.addEventListener('prog', () => { if ($('#bd')) bestEl() });
+            $('#lv').onchange = e => { lv = e.target.value; round = { n: 0, ok: 0 }; bestEl(); ask(); e.target.blur() };
+            $('#nq').onclick = ask; $('#rp').onclick = hear;
+            $('#ans').onclick = e => {
+                const b = e.target.closest('[data-i]'); if (!b || q.done) return; q.done = 1; sc[1]++; const ok = +b.dataset.i === q.k;
+                if (ok) sc[0]++;
+                round.n++; if (ok) round.ok++;
+                let extra = `　回合 ${round.ok}/10`;
+                if (round.n >= 10) {
+                    const s = round.ok * 10; PROG.post('ear:' + lv, s);
+                    extra = `　🎉 回合完成：${s} 分`; round = { n: 0, ok: 0 }
+                }
+                $('#fb').innerHTML = (ok ? `<span class="ok">答對了！</span>是 ${q.p[q.k].n}` : `<span class="no">差一點</span>　正確答案是 <b>${q.p[q.k].n}</b>`) + extra;
+                setHL([], -1, q.notes); hear(); $('#sc').textContent = `　得分 ${sc[0]}／${sc[1]}`
+            };
+            lv = $('#lv').value; bestEl(); ask()
+        }
+        function ask() {
+            const p = lv === 'd' ? CH.slice(0, 4).map(c => ({ n: c[1], iv: c[2] })) : EI.slice(0, { a: 4, b: 8, c: 12 }[lv]).map(([d, n]) => ({ n, iv: [0, d] }));
+            const k = rnd(p.length), base = 55 + rnd(14); q = { p, k, notes: p[k].iv.map(x => base + x), done: 0 }; setHL(); $('#fb').textContent = '';
+            $('#ans').innerHTML = p.map((x, i) => `<button data-i="${i}">${x.n}</button>`).join(''); hear()
+        }
+        function hear() { q && play(q.notes, lv === 'd', lv === 'd' ? 1.4 : .6) }
+
+        /* 樂理：加上五度圈圖 */
+        const P = (l, a, c) => `<button data-p="${a}"${c ? ' data-c="1"' : ''}>▶ ${l}</button>`;
+        function circleOfFifths() {
+            const MAJ = ['C', 'G', 'D', 'A', 'E', 'B', 'F♯', 'D♭', 'A♭', 'E♭', 'B♭', 'F'];
+            const MIN = ['Am', 'Em', 'Bm', 'F♯m', 'C♯m', 'G♯m', 'D♯m', 'B♭m', 'Fm', 'Cm', 'Gm', 'Dm'];
+            let s = '<svg class="cof" viewBox="0 0 240 240" width="300" role="img" aria-label="五度圈">';
+            s += '<circle cx="120" cy="120" r="80" fill="none" stroke="var(--bd)"/>';
+            MAJ.forEach((n, i) => {
+                const a = i / 12 * 2 * Math.PI - Math.PI / 2;
+                const t = (r, txt, fill, size) => `<text x="${(120 + r * Math.cos(a)).toFixed(1)}" y="${(120 + r * Math.sin(a) + 5).toFixed(1)}" text-anchor="middle" fill="${fill}" font-size="${size}">${txt}</text>`;
+                s += t(96, n, 'var(--ac)', 15) + t(64, MIN[i], 'var(--mut)', 11)
+            });
+            return s + '</svg>'
+        }
+        function theoryUI() {
+            $('#panel').innerHTML = `<h2>樂理與 MIDI</h2>
+<details open><summary>音名與唱名</summary><p>鋼琴的白鍵循環出現 C D E F G A B，唱成 Do Re Mi Fa Sol La Si，簡譜記成 1 2 3 4 5 6 7。黑鍵是升記號 ♯（比右邊的白鍵低半音時叫降記號 ♭，例如 C♯ 與 D♭ 是同一個鍵）。從一個 C 到下一個 C 是一個「八度」，頻率剛好加倍。換到「琴鍵標籤」試試三種標示。</p>${P('聽 Do 到 Si', '60,62,64,65,67,69,71,72')}</details>
+<details><summary>半音與全音</summary><p>相鄰的兩個琴鍵（包含黑鍵）相差<b>半音</b>，隔一個鍵是<b>全音</b>。E–F 與 B–C 之間沒有黑鍵，所以它們只差半音。</p>${P('半音 E→F', '64,65')} ${P('全音 C→D', '60,62')}</details>
+<details><summary>大調音階公式</summary><p>公式是 <b>全 全 半 全 全 全 半</b>。從 C 開始套用，剛好全是白鍵；換從 G 開始，就會出現一個黑鍵 F♯。到「音階與和弦」頁可以看任何根音。</p>${P('C 大調', '60,62,64,65,67,69,71,72')} ${P('G 大調', '67,69,71,72,74,76,78,79')}</details>
+<details><summary>音程：兩個音的距離</summary><p>用半音數計算：</p><table><tr><th>半音</th><td>1</td><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td><td>9</td><td>10</td><td>11</td><td>12</td></tr>
+<tr><th>名稱</th>${IV.slice(1).map(x => `<td>${x}</td>`).join('')}</tr></table><p class="mut">到「聽力訓練」把它們練成直覺。</p></details>
+<details><summary>和弦：同時響起的音</summary><p>三和弦＝根音＋三度＋五度。大三和弦是 4＋3 個半音（明亮），小三和弦是 3＋4（柔和）。只差中間一個音，情緒就完全不同。</p>${P('C 大三和弦', '60,64,67', 1)} ${P('C 小三和弦', '60,63,67', 1)}</details>
+<details><summary>調性與五度圈</summary><p>從 C 往上每五度走一步：C → G → D → A → E → B → F♯，每走一步就多一個升記號（順序 F C G D A E B）。往下走則是 F → B♭ → E♭…，每步多一個降記號。外圈是大調，內圈是「關係小調」（共用同一組音，如 C 大調與 A 小調）。</p>
+${circleOfFifths()}${P('播放五度圈（一個八度內）', '60,67,62,69,64,71,66,61,68,63,70,65')}</details>
+<details><summary>節奏與拍號</summary><p>4/4 拍代表每小節 4 拍、以四分音符為一拍。全音符 4 拍、二分音符 2 拍、四分音符 1 拍、八分音符半拍。用節拍器感受一下（第一拍較高音）：</p>
+<div class="row"><input id="bpm" type="range" min="40" max="200" value="80"><b id="bv">80</b> BPM <button id="mtb" class="p">開始</button></div></details>
+<details><summary>MIDI 是什麼？</summary><p>MIDI 傳的不是聲音，而是<b>演奏指令</b>：哪個音（Note，0–127，中央 C＝60）、按多大力（力度 Velocity，0–127）、何時按下與放開（Note On／Off）、哪個頻道（1–16），還有踏板等控制器。所以 MIDI 檔很小，能換音色、改速度、移調，也是電腦音樂製作與電子琴連線的共通語言。</p>
+<p>用 USB 接上電子琴，按右上角「連接 MIDI 鍵盤」授權，彈彈看，下面會即時解碼你送出的指令：</p><div id="mlog"></div></details>`;
+            $('#bpm').oninput = e => $('#bv').textContent = e.target.value;
+            $('#mtb').onclick = e => {
+                if (mt) { clearInterval(mt); mt = null; e.target.textContent = '開始'; return }
+                e.target.textContent = '停止'; let n = 0; mt = setInterval(() => {
+                    A(); const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+                    o.frequency.value = n++ % 4 ? 800 : 1200; g.gain.setValueAtTime(.3, t); g.gain.exponentialRampToValueAtTime(.001, t + .08); o.connect(g); g.connect(ac.destination); o.start(); o.stop(t + .1)
+                }, 60000 / $('#bpm').value)
+            };
+            logMidi('（等待 MIDI 訊息…）'); mlog.pop()
+        }
+        go('play');
+    </script>
+</body>
+
+</html>

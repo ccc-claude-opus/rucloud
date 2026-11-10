@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS progress (
+  drill TEXT PRIMARY KEY,
+  best INTEGER NOT NULL,
+  plays INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
