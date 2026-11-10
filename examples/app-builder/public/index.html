@@ -47,6 +47,11 @@ header h1 { font-size:16px } header .sp { flex:1 }
 .bubble.user { align-self:flex-end; background:var(--user) }
 .bubble.ai { align-self:flex-start; background:var(--card); border:1px solid var(--bd) }
 .bubble.ai.thinking { color:var(--mut) }
+/* 思考過程：可摺疊、完整顯示 */
+details.think { background:var(--bg); border:1px solid var(--bd); border-radius:8px; padding:4px 8px; margin-bottom:6px; font-size:12px }
+details.think summary { cursor:pointer; color:var(--mut); font-size:12px }
+.think-text { max-height:140px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; color:var(--mut); padding:4px 2px; line-height:1.5 }
+.bubble .body { white-space:pre-wrap; word-break:break-word }
 .bubble .ver { color:var(--ac); font-weight:600; font-size:12px; display:block; margin-top:6px }
 .bubble.err { border-color:var(--no); color:var(--no) }
 #inbar { padding:10px; border-top:1px solid var(--bd); display:flex; gap:8px }
@@ -113,10 +118,12 @@ header h1 { font-size:16px } header .sp { flex:1 }
           <button data-v="view" class="on">預覽</button>
           <button data-v="code">程式碼</button>
           <select id="vsel" title="版本"></select>
+          <select id="fsel" class="hidden" title="檔案"></select>
           <a id="open" target="_blank" style="font-size:13px;color:var(--ac)">↗ 開新分頁</a>
           <a id="dl" style="font-size:13px;color:var(--ac)">⬇ 下載 zip</a>
         </div>
-        <div id="frame-wrap"><iframe id="frame" sandbox="allow-scripts allow-forms allow-modals allow-popups"></iframe><pre id="code" class="hidden"></pre></div>
+        <div id="fband" class="hidden" style="background:#3a2f14;color:#ffd166;font-size:12px;padding:5px 10px">⚙ 全端專案：預覽只會呈現前端畫面（後端 API 不在此執行）。下載 zip 後執行 <b>rucloud dev 資料夾 --d1-init DB=schema.sql</b> 即可連同資料庫一起跑。</div>
+        <div id="frame-wrap"><iframe id="frame"></iframe><pre id="code" class="hidden"></pre></div>
       </div>
     </div>
   </div>
@@ -191,25 +198,40 @@ async function openProject(id) {
 
 async function refreshProject() {
   curData = await api('/api/projects/' + cur);
-  $('#pname').textContent = curData.project.name;
+  $('#pname').textContent = curData.project.name + (curData.project.mode === 'full' ? '　⚙ 全端' : '');
   const v = curData.latest;
   $('#vsel').innerHTML = curData.versions.map((x) => `<option value="${x.version}">v${x.version}（${(x.bytes / 1024).toFixed(1)} KB）</option>`).join('') || '<option value="">尚無版本</option>';
   $('#vsel').value = v || '';
-  $('#open').href = v ? `/apps/${cur}?v=${v}` : '#';
+  $('#open').href = v ? `/apps/${cur}/?v=${v}` : '#';
   $('#dl').href = v ? `/api/projects/${cur}/download?v=${v}` : '#';
+  $('#fband').classList.toggle('hidden', curData.project.mode !== 'full');
+  $('#fband').innerHTML = curData.project.mode === 'full'
+    ? '⚙ 全端專案：<b>預覽與開新分頁都是完整執行</b>（後端 API + 專案專屬 SQLite 資料庫）。下載 zip 則是可直接部署的標準專案。'
+    : '';
+  const fs = $('#fsel');
+  fs.classList.toggle('hidden', curData.project.mode !== 'full');
+  fs.innerHTML = (curData.files || []).map((f) => `<option value="${f.path}">${f.path}（${(f.bytes / 1024).toFixed(1)} KB）</option>`).join('');
   if (mode === 'view') setFrame(v);
   else loadCode();
 }
 
 function setFrame(v) {
-  $('#frame').src = v ? `/apps/${cur}?v=${v}&r=${Date.now()}` : 'about:blank';
+  $('#frame').src = v ? `/apps/${cur}/?v=${v}&r=${Date.now()}` : 'about:blank';
 }
 async function loadCode() {
   if (!curData?.latest) { $('#code').textContent = '（還沒有版本）'; return; }
-  const row = await api(`/api/projects/${cur}/versions/${$('#vsel').value || curData.latest}`);
-  $('#code').textContent = row.html;
+  if (curData.project.mode === 'full') {
+    const path = $('#fsel').value || (curData.files[0] || {}).path;
+    if (!path) { $('#code').textContent = '（還沒有版本）'; return; }
+    const row = await api(`/api/projects/${cur}/versions/${$('#vsel').value || curData.latest}?path=${encodeURIComponent(path)}`);
+    $('#code').textContent = row.html;
+  } else {
+    const row = await api(`/api/projects/${cur}/versions/${$('#vsel').value || curData.latest}`);
+    $('#code').textContent = row.html;
+  }
 }
-$('#vsel').onchange = () => { mode === 'view' ? setFrame(+$('#vsel').value) : loadCode(); $('#open').href = `/apps/${cur}?v=${$('#vsel').value}`; $('#dl').href = `/api/projects/${cur}/download?v=${$('#vsel').value}`; };
+$('#fsel').onchange = loadCode;
+$('#vsel').onchange = () => { mode === 'view' ? setFrame(+$('#vsel').value) : loadCode(); $('#open').href = `/apps/${cur}/?v=${$('#vsel').value}`; $('#dl').href = `/api/projects/${cur}/download?v=${$('#vsel').value}`; };
 $('#ptabs').onclick = (e) => {
   const b = e.target.closest('[data-v]'); if (!b) return;
   mode = b.dataset.v;
@@ -229,6 +251,21 @@ function bubble(cls, text) {
   return d;
 }
 
+// AI 氣泡：可摺疊的完整思考過程 + 回答本文
+function aiBubble() {
+  const d = document.createElement('div');
+  d.className = 'bubble ai';
+  const det = document.createElement('details');
+  det.className = 'think';
+  det.innerHTML = '<summary>🤔 思考過程</summary><div class="think-text"></div>';
+  const body = document.createElement('div');
+  body.className = 'body';
+  d.append(det, body);
+  $('#msgs').append(d);
+  $('#msgs').scrollTop = 1e9;
+  return { root: d, det, think: det.querySelector('.think-text'), body };
+}
+
 function render() {
   const has = !!curData;
   $('#work').querySelectorAll('#chat,#prev').forEach((el) => el.classList.toggle('hidden', !has));
@@ -240,45 +277,56 @@ function render() {
     }
     empty.innerHTML = `<div style="font-size:40px">⚡</div><h2>你想做一個什麼網站？</h2>
       <textarea id="bigprompt" placeholder="例如：一個記帳小工具，可以輸入支出、看每月統計圖表，風格要可愛"></textarea>
+      <div class="mut" style="margin-bottom:8px">類型：
+        <label><input type="radio" name="pmode" value="static" checked> 靜態網頁（單一 HTML）</label>
+        <label><input type="radio" name="pmode" value="full"> 全端應用（Worker + D1 資料庫）</label>
+      </div>
       <button class="p" id="biggo" style="width:100%;padding:10px">✨ 開始建造</button>
       <div class="chips">
         <button data-x="一個番茄鐘計時器，有開始/暫停、可設定分鐘數、完成時播放音效">🍅 番茄鐘</button>
         <button data-x="一個 Markdown 筆記本，左邊編輯右邊即時預覽，筆記存 localStorage">📝 Markdown 筆記</button>
         <button data-x="一個畫板 app，可以選顏色、粗細，畫完下載成 PNG">🎨 小畫板</button>
-        <button data-x="一個匯率換算與小費計算機，介面要精美">💱 換算機</button>
+        <button data-x="一個團隊待辦清單，任務存在伺服器資料庫，重新整理也不會不見" data-mode="full">✅ 雲端待辦清單（含後端）</button>
       </div>`;
-    empty.querySelector('#biggo').onclick = () => createFrom(empty.querySelector('#bigprompt').value);
-    empty.querySelectorAll('[data-x]').forEach((b) => (b.onclick = () => { empty.querySelector('#bigprompt').value = b.dataset.x; }));
+    empty.querySelector('#biggo').onclick = () => createFrom(empty.querySelector('#bigprompt').value, empty.querySelector('input[name=pmode]:checked').value);
+    empty.querySelectorAll('[data-x]').forEach((b) => (b.onclick = () => {
+      empty.querySelector('#bigprompt').value = b.dataset.x;
+      if (b.dataset.mode) empty.querySelector(`input[name=pmode][value="${b.dataset.mode}"]`).checked = true;
+    }));
   } else if (empty) { empty.remove(); }
   if (has) {
     $('#msgs').innerHTML = '';
     for (const m of curData.messages) {
-      const b = bubble(m.role === 'user' ? 'user' : 'ai', m.content);
-      if (m.role === 'assistant' && m.version) {
+      if (m.role === 'user') { bubble('user', m.content); continue; }
+      const b = aiBubble();
+      if (m.reasoning) { b.think.textContent = m.reasoning; } else { b.det.remove(); }
+      b.body.textContent = m.content;
+      if (m.version) {
         const tag = document.createElement('span');
         tag.className = 'ver'; tag.textContent = `✓ 已產生 v${m.version}`;
-        b.append(tag);
+        b.root.append(tag);
       }
     }
     if (!curData.messages.length) bubble('ai thinking', '描述你的網站需求，AI 會直接產出第一個版本！');
   }
 }
 
-async function createFrom(prompt) {
+async function createFrom(prompt, mode = 'static') {
   if (!prompt.trim()) return;
-  const p = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: prompt.slice(0, 30) }) });
+  const p = await api('/api/projects', { method: 'POST', body: JSON.stringify({ name: prompt.slice(0, 30), mode }) });
   cur = p.id; await loadProjects();
-  curData = { project: p, messages: [], versions: [], latest: null };
+  curData = { project: p, messages: [], versions: [], latest: null, files: [] };
   render();
   sendChat(prompt);
 }
 
-async function sendChat(text) {
+async function sendChat(text, attempt = 0) {
   if (busy || !text.trim()) return;
   busy = true; $('#send').disabled = true;
-  bubble('user', text);
-  const ai = bubble('ai thinking', '…建造中（模型思考與產生程式碼需要一點時間）');
-  let acc = '';
+  if (attempt === 0) bubble('user', text);
+  const ai = aiBubble();
+  ai.det.querySelector('summary').textContent = '🤔 思考中…';
+  let acc = '', thinkAcc = '', finished = false;
   try {
     const r = await fetch(`/api/projects/${cur}/chat`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: text }),
@@ -294,22 +342,53 @@ async function sendChat(text) {
       for (const part of parts) {
         if (!part.startsWith('data:')) continue;
         const ev = JSON.parse(part.slice(5));
-        if (ev.t === 'c') { acc += ev.x; ai.classList.remove('thinking'); ai.textContent = acc; $('#msgs').scrollTop = 1e9; }
-        if (ev.t === 'r') { ai.classList.add('thinking'); ai.textContent = '🤔 思考中：' + (ev.x.slice(-160)); $('#msgs').scrollTop = 1e9; }
-        if (ev.t === 'done') version = ev.version;
-        if (ev.t === 'err') errored = ev.e;
+        if (ev.t === 'hb') { // 心跳：只更新 summary，不閃動
+          ai.det.querySelector('summary').textContent = `🤔 思考中… 已接收 ${(ev.n / 1024).toFixed(0)} KB`;
+        } else if (ev.t === 'r') { // 思考過程：完整累積顯示
+          thinkAcc += ev.x;
+          ai.think.textContent = thinkAcc;
+          ai.think.scrollTop = ai.think.scrollHeight;
+        } else if (ev.t === 'c') { // 回答內容
+          acc += ev.x;
+          ai.body.textContent = acc;
+          ai.det.removeAttribute('open'); // 內容開始後收起思考區（仍可點開看全文）
+          $('#msgs').scrollTop = 1e9;
+        } else if (ev.t === 'retry') {
+          acc = ''; thinkAcc = '';
+          ai.body.textContent = '';
+          ai.think.textContent = '';
+          ai.det.setAttribute('open', '');
+          ai.det.querySelector('summary').textContent = `⚠ 連線中斷，自動重試（第 ${ev.n} 次）…`;
+        } else if (ev.t === 'done') {
+          version = ev.version; finished = true;
+        } else if (ev.t === 'err') {
+          errored = ev.e; finished = true;
+        }
       }
     }
-    if (errored) { ai.classList.add('err'); ai.textContent = '⚠ ' + errored; }
+    if (!finished && attempt < 2) { // 連線被切斷（沒有 done/err）→ 自動重送
+      busy = false;
+      ai.det.querySelector('summary').textContent = `⚠ 連線中斷，自動重試（第 ${attempt + 1} 次）…`;
+      return sendChat(text, attempt + 1);
+    }
+    if (thinkAcc) { // 有思考過程就保留（預設收起）
+      ai.det.querySelector('summary').textContent = '🤔 思考過程';
+      ai.det.removeAttribute('open');
+    } else { ai.det.remove(); }
+    if (errored) { ai.classList.add('err'); ai.body.textContent = '⚠ ' + errored; }
     else if (version) {
-      ai.innerHTML = '';
-      const pre = document.createElement('span'); pre.textContent = acc.replace(/<APP>[\s\S]*<\/APP>/, '');
-      const tag = document.createElement('span'); tag.className = 'ver'; tag.textContent = `✓ 已產生 v${version}，右邊可預覽`;
-      ai.append(pre, tag);
+      const tag = document.createElement('span');
+      tag.className = 'ver'; tag.textContent = `✓ 已產生 v${version}，右邊可預覽`;
+      ai.root.append(tag);
     }
     await refreshProject();
   } catch (e) {
-    ai.classList.add('err'); ai.textContent = '⚠ ' + e.message;
+    if (attempt < 2 && !/金鑰|權限|格式/.test(e.message)) { // 網路層錯誤也重試
+      busy = false;
+      ai.det.querySelector('summary').textContent = `⚠ 連線中斷，自動重試（第 ${attempt + 1} 次）…`;
+      return sendChat(text, attempt + 1);
+    }
+    ai.classList.add('err'); ai.body.textContent = '⚠ ' + e.message;
   }
   busy = false; $('#send').disabled = false;
   $('#prompt').value = ''; $('#prompt').focus();

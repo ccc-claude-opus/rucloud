@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
   name TEXT NOT NULL,
+  mode TEXT NOT NULL DEFAULT 'static',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -41,4 +42,14 @@ CREATE TABLE IF NOT EXISTS versions (
   bytes INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   PRIMARY KEY (project_id, version)
+);
+
+-- 全端模式：每個版本的多個檔案（src/worker.js、public/index.html、schema.sql…）
+CREATE TABLE IF NOT EXISTS version_files (
+  project_id INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  path TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, version, path)
 );

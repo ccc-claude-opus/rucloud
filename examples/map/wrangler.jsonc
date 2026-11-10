@@ -4,5 +4,5 @@
   "main": "src/worker.js",
   "compatibility_date": "2025-11-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
-  "d1_databases": [{ "binding": "DB", "database_name": "map-db", "database_id": "local" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "map-db", "database_id": "fd78a3b1-2743-4538-a435-8315aad9f086" }]
 }

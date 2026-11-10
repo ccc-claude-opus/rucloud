@@ -1,9 +1,12 @@
-// app-builder：Lovable 式的 AI 網站產生器
-//   /api/*     帳號（註冊/登入，HMAC 簽章 cookie）、AI 設定、專案與對話（SSE 串流）
-//   /apps/:id  AI 產生出來的網站（公開、可分享、可嵌 iframe）
-//   其他       靜態檔案（public/，由 Assets 提供）
+// app-builder：AI 網站產生器（rucloud 專用）
+//   /api/*            帳號（註冊/登入，HMAC 簽章 cookie）、AI 設定、專案與對話（SSE 串流）
+//   /apps/:id/...     產生出來的 app：靜態網站直接回傳；全端專案由「內建執行環境」跑
+//                     （動態載入 src/worker.js，env.DB 是該專案專屬的 SQLite Durable Object）
+//   其他              靜態檔案（public/，由 Assets 提供）
 // AI 金鑰：使用者可在「AI 設定」填自己的 key（存 D1）；沒填就用環境變數
-//   NVIDIA_API_KEY / MINIMAX_API_KEY（正式部署用 wrangler secret put）。
+//   NVIDIA_API_KEY / MINIMAX_API_KEY（.dev.vars 或 rucloud.toml 的 env_file）。
+
+import { DurableObject } from 'cloudflare:workers';
 
 const COOKIE = 'session';
 const SESSION_DAYS = 30;
@@ -124,6 +127,118 @@ function extractHtml(text) {
   return /^\s*(<!doctype|<html)/i.test(t) ? t : null;
 }
 
+// 全端模式：從模型回覆抽出多個檔案（<FILE path="...">…</FILE>）
+function normalizePath(p) {
+  return String(p).replace(/^[./\\]+/, '').replace(/\\/g, '/').replace(/\.\./g, '').trim();
+}
+function extractFiles(text) {
+  const out = [];
+  for (const m of text.matchAll(/<FILE\s+(?:path|name)\s*=\s*["']([^"']+)["']\s*>\s*\n?([\s\S]*?)<\/FILE>/g)) {
+    const path = normalizePath(m[1]);
+    if (path) out.push({ path, content: m[2].trimEnd() + '\n' });
+  }
+  return out;
+}
+
+const FULLSTACK_PROMPT = `你是資深 Cloudflare Workers 工程師，把使用者的需求變成完整的 rucloud / Cloudflare Workers 全端專案（前端 + 後端 API + D1 資料庫）。這個專案會被平台即時執行，請嚴守以下規範。
+
+輸出格式：每個檔案用標記包住，例如：
+<FILE path="src/worker.js">
+（完整檔案內容）
+</FILE>
+
+必須輸出這三個檔案，一律輸出「完整」內容、不要節錄：
+1. src/worker.js — 只能有一個 export：export default { async fetch(request, env) {...} }。嚴禁使用任何 import 或其他 export（平台會動態載入這個檔案）。用 env.DB（D1，SQLite）做資料庫；/api/* 提供 JSON API；SQL 一律 prepare().bind() 防注入；其他路徑 return env.ASSETS.fetch(request) 回傳靜態檔案
+2. public/index.html — 前端單檔（內嵌 CSS/JS，可用 CDN）。呼叫 API 必須用「相對路徑」：fetch('api/tasks')、fetch('api/tasks/1', ...)，千萬不要以 / 開頭（app 被掛在子路徑下）
+3. schema.sql — CREATE TABLE IF NOT EXISTS 的資料表結構
+
+其他規則：
+- 修改既有專案時，仍要輸出所有「需要變更」檔案的完整內容
+- D1 用法：await env.DB.prepare('SELECT ... WHERE id = ?').bind(id).first() / .all()（回傳 {results}）/ .run()（meta.last_row_id 是新資料的 id）
+- 前端不使用需要 build 的框架，直接原生 JS；localStorage 可用
+- 先用 1-3 句話說明你做了什麼，再輸出檔案；<FILE> 標記之間不要有任何說明文字或 markdown 圍欄`;
+
+// wrangler.jsonc 由平台代產，AI 只需要管程式
+function wranglerFor(name) {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app';
+  return JSON.stringify(
+    {
+      name: slug,
+      main: 'src/worker.js',
+      compatibility_date: '2025-11-01',
+      assets: { directory: './public', binding: 'ASSETS', run_worker_first: ['/api/*'] },
+      d1_databases: [{ binding: 'DB', database_name: `${slug}-db`, database_id: 'local' }],
+    },
+    null, 2,
+  ) + '\n';
+}
+
+// ---------- Schema（冪等，初次使用自動建立） ----------
+
+let schemaReady = false;
+async function ensureSchema(db) {
+  if (schemaReady) return;
+  for (const sql of [
+    `CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT NOT NULL UNIQUE,
+      pass_hash TEXT NOT NULL,
+      pass_salt TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS settings (
+      user_id INTEGER PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT 'nvidia',
+      base_url TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      api_key TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'static',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      version INTEGER,
+      created_at TEXT NOT NULL
+    )`,
+    'CREATE INDEX IF NOT EXISTS idx_messages_project ON messages (project_id, id)',
+    `CREATE TABLE IF NOT EXISTS versions (
+      project_id INTEGER NOT NULL,
+      version INTEGER NOT NULL,
+      html TEXT NOT NULL,
+      bytes INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, version)
+    )`,
+    `CREATE TABLE IF NOT EXISTS version_files (
+      project_id INTEGER NOT NULL,
+      version INTEGER NOT NULL,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (project_id, version, path)
+    )`,
+  ]) {
+    await db.prepare(sql).run();
+  }
+  try { // 舊資料庫補欄位
+    await db.prepare("ALTER TABLE projects ADD COLUMN mode TEXT NOT NULL DEFAULT 'static'").run();
+  } catch { /* 已存在 */ }
+  try {
+    await db.prepare("ALTER TABLE messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''").run();
+  } catch { /* 已存在 */ }
+  schemaReady = true;
+}
+
 // ---------- 帳號 ----------
 
 async function register(request, env, db) {
@@ -209,12 +324,24 @@ async function requireProject(db, userId, id) {
 
 async function projectPayload(db, proj) {
   const messages = (await db.prepare(
-    'SELECT id, role, content, version, created_at FROM messages WHERE project_id = ? ORDER BY id',
+    'SELECT id, role, content, reasoning, version, created_at FROM messages WHERE project_id = ? ORDER BY id',
   ).bind(proj.id).all()).results;
-  const versions = (await db.prepare(
-    'SELECT version, bytes, created_at FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 50',
-  ).bind(proj.id).all()).results;
-  return { project: proj, messages, versions, latest: versions[0]?.version || null };
+  const full = proj.mode === 'full';
+  const versions = full
+    ? (await db.prepare(
+        `SELECT version, SUM(LENGTH(content)) AS bytes, created_at FROM version_files
+         WHERE project_id = ? GROUP BY version ORDER BY version DESC LIMIT 50`,
+      ).bind(proj.id).all()).results
+    : (await db.prepare(
+        'SELECT version, bytes, created_at FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 50',
+      ).bind(proj.id).all()).results;
+  const latest = versions[0]?.version || null;
+  const files = full && latest
+    ? (await db.prepare(
+        'SELECT path, LENGTH(content) AS bytes FROM version_files WHERE project_id = ? AND version = ? ORDER BY path',
+      ).bind(proj.id, latest).all()).results
+    : [];
+  return { project: proj, messages, versions, latest, files };
 }
 
 async function listProjects(db, userId) {
@@ -227,12 +354,13 @@ async function listProjects(db, userId) {
 
 async function createProject(request, db, userId) {
   return handle(async () => {
-    const { name } = await readJson(request);
+    const { name, mode } = await readJson(request);
     const n = String(name || '').trim().slice(0, 60) || '未命名專案';
+    const m = mode === 'full' ? 'full' : 'static';
     const now = new Date().toISOString();
-    const r = await db.prepare('INSERT INTO projects (user_id, name, created_at, updated_at) VALUES (?, ?, ?, ?)')
-      .bind(userId, n, now, now).run();
-    return json({ id: r.meta.last_row_id, name: n });
+    const r = await db.prepare('INSERT INTO projects (user_id, name, mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?)')
+      .bind(userId, n, m, now, now).run();
+    return json({ id: r.meta.last_row_id, name: n, mode: m });
   });
 }
 
@@ -246,18 +374,30 @@ async function deleteProject(db, userId, id) {
     await db.batch([
       db.prepare('DELETE FROM messages WHERE project_id = ?').bind(proj.id),
       db.prepare('DELETE FROM versions WHERE project_id = ?').bind(proj.id),
+      db.prepare('DELETE FROM version_files WHERE project_id = ?').bind(proj.id),
       db.prepare('DELETE FROM projects WHERE id = ?').bind(proj.id),
     ]);
     return json({ ok: true });
   });
 }
 
-async function versionHtml(db, userId, id, v) {
+async function versionHtml(db, userId, id, v, path) {
   return handle(async () => {
     const proj = await requireProject(db, userId, id);
-    const row = v
-      ? await db.prepare('SELECT version, html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, v).first()
-      : await db.prepare('SELECT version, html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').bind(proj.id).first();
+    const ver = v || (await db.prepare(
+      'SELECT MAX(version) AS v FROM ' + (proj.mode === 'full' ? 'version_files' : 'versions') + ' WHERE project_id = ?',
+    ).bind(proj.id).first())?.v;
+    if (!ver) throw new HttpError(404, '還沒有任何版本');
+    if (proj.mode === 'full') {
+      if (!path) throw new HttpError(400, '需要 path 參數');
+      const row = await db.prepare(
+        'SELECT path, content FROM version_files WHERE project_id = ? AND version = ? AND path = ?',
+      ).bind(proj.id, ver, normalizePath(path)).first();
+      if (!row) throw new HttpError(404, '找不到這個檔案');
+      return json({ version: ver, path: row.path, html: row.content });
+    }
+    const row = await db.prepare('SELECT version, html FROM versions WHERE project_id = ? AND version = ?')
+      .bind(proj.id, ver).first();
     if (!row) throw new HttpError(404, '還沒有任何版本');
     return json(row);
   });
@@ -277,27 +417,49 @@ async function chat(request, env, db, userId, projectId) {
   }
 
   const now = new Date().toISOString();
-  await db.prepare('INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)')
-    .bind(proj.id, 'user', text, now).run();
-
-  const latest = await db.prepare('SELECT version, html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1')
+  // 客戶端斷線重試時會重送相同訊息：若最後一則就是相同的 user 訊息（且沒有回覆），就不重複存
+  const last = await db.prepare('SELECT role, content FROM messages WHERE project_id = ? ORDER BY id DESC LIMIT 1')
     .bind(proj.id).first();
+  if (!(last && last.role === 'user' && last.content === text)) {
+    await db.prepare('INSERT INTO messages (project_id, role, content, created_at) VALUES (?, ?, ?, ?)')
+      .bind(proj.id, 'user', text, now).run();
+  }
+
+  const full = proj.mode === 'full';
+  const latest = full
+    ? await db.prepare('SELECT MAX(version) AS version FROM version_files WHERE project_id = ?').bind(proj.id).first()
+    : await db.prepare('SELECT version, html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1')
+        .bind(proj.id).first();
   const history = (await db.prepare(
     'SELECT role, content FROM messages WHERE project_id = ? ORDER BY id DESC LIMIT 12',
   ).bind(proj.id).all()).results.reverse()
     .filter((m) => m.content.trim()) // 跳過空訊息（先前失敗的請求會留空）
     .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
 
-  const sys = SYSTEM_PROMPT + (latest
-    ? `\n\n這個專案目前的 app 原始碼（使用者接下來會要求修改它）：\n<APP>\n${latest.html.slice(0, 80000)}\n</APP>`
-    : '');
+  let sys = full ? FULLSTACK_PROMPT : SYSTEM_PROMPT;
+  if (latest?.version) {
+    if (full) {
+      const rows = (await db.prepare(
+        'SELECT path, content FROM version_files WHERE project_id = ? AND version = ? ORDER BY path',
+      ).bind(proj.id, latest.version).all()).results;
+      const current = rows.map((r) => `<FILE path="${r.path}">\n${r.content}\n</FILE>`).join('\n');
+      sys += `\n\n這個專案目前的完整原始碼（使用者接下來會要求修改它）：\n${current.slice(0, 100_000)}`;
+    } else {
+      sys += `\n\n這個專案目前的 app 原始碼（使用者接下來會要求修改它）：\n<APP>\n${latest.html.slice(0, 80000)}\n</APP>`;
+    }
+  }
 
   return new Response(new ReadableStream({
     async start(controller) {
       const e2 = new TextEncoder();
       const send = (o) => controller.enqueue(e2.encode(`data: ${JSON.stringify(o)}\n\n`));
-      let full = '';
+      let answer = '';
+      let think = '';
       try {
+        let attempt = 0;
+        while (true) {
+        attempt++;
+        let complete = false;
         const upstream = await fetch(cfg.url, {
           method: 'POST',
           headers: { authorization: `Bearer ${cfg.key}`, 'content-type': 'application/json' },
@@ -313,7 +475,9 @@ async function chat(request, env, db, userId, projectId) {
         if (!upstream.ok) {
           const t = await upstream.text();
           send({ t: 'err', e: `AI 供應商回應 ${upstream.status}：${t.slice(0, 300)}` });
+          break; // 設定類錯誤，重試也沒用
         } else if (ct.includes('text/event-stream')) {
+          // rucloud 沒有 CPU 限制：逐事件即時串流（思考與內容都邊產生邊送）
           const reader = upstream.body.getReader();
           const dec = new TextDecoder();
           let buf = '';
@@ -327,13 +491,14 @@ async function chat(request, env, db, userId, projectId) {
               const s = line.trim();
               if (!s.startsWith('data:')) continue;
               const data = s.slice(5).trim();
-              if (data === '[DONE]') break outer;
+              if (data === '[DONE]') { complete = true; break outer; }
               try {
                 const d = JSON.parse(data).choices?.[0]?.delta;
                 if (typeof d?.content === 'string' && d.content) {
-                  full += d.content;
+                  answer += d.content;
                   send({ t: 'c', x: d.content });
                 } else if (typeof d?.reasoning_content === 'string' && d.reasoning_content) {
+                  think += d.reasoning_content;
                   send({ t: 'r', x: d.reasoning_content });
                 }
               } catch { /* 忽略缺損的行 */ }
@@ -343,31 +508,64 @@ async function chat(request, env, db, userId, projectId) {
           const j = await upstream.json();
           if (j.base_resp?.status_code) {
             send({ t: 'err', e: `AI 供應商錯誤：${j.base_resp.status_msg || j.base_resp.status_code}` });
+            break; // 設定類錯誤，重試也沒用
           } else {
             const c = j.choices?.[0]?.message?.content || '';
-            if (c) { full = c; send({ t: 'c', x: c }); }
+            if (c) { answer = c; send({ t: 'c', x: c }); complete = true; }
             else send({ t: 'err', e: 'AI 供應商沒有回傳內容。' });
           }
         }
+        // 串流正常結束、或已經有可抽取的內容就不重試；斷流（NVIDIA 偶發）則重來
+        if (complete || answer.trim() || attempt >= 3) break;
+        send({ t: 'retry', n: attempt });
+      }
 
-        const html = extractHtml(full);
+        // 依模式抽取並存成新版本
         let version = null;
-        if (html) {
-          version = (latest?.version || 0) + 1;
-          if (html.length <= 400_000) {
-            await db.prepare('INSERT INTO versions (project_id, version, html, bytes, created_at) VALUES (?, ?, ?, ?, ?)')
-              .bind(proj.id, version, html, html.length, new Date().toISOString()).run();
-          } else {
-            version = null;
-            send({ t: 'err', e: '產生的網頁超過 400KB，沒有存成新版本。' });
+        let saved = 0;
+        if (full) {
+          const files = extractFiles(answer);
+          if (files.length && !files.some((f) => f.path === 'public/index.html')) {
+            send({ t: 'err', e: '模型沒有輸出 public/index.html，沒有存成新版本。' });
+          } else if (files.length) {
+            version = (latest?.version || 0) + 1;
+            const total = files.reduce((s, f) => s + f.content.length, 0);
+            if (total <= 800_000) {
+              const now2 = new Date().toISOString();
+              await db.batch([
+                db.prepare('DELETE FROM version_files WHERE project_id = ? AND version = ?').bind(proj.id, version),
+                ...files.map((f) => db.prepare(
+                  'INSERT INTO version_files (project_id, version, path, content, created_at) VALUES (?, ?, ?, ?, ?)',
+                ).bind(proj.id, version, f.path, f.content, now2)),
+              ]);
+              saved = total;
+            } else {
+              version = null;
+              send({ t: 'err', e: '產生的專案超過 800KB，沒有存成新版本。' });
+            }
+          } else if (!answer.trim()) {
+            send({ t: 'err', e: 'AI 沒有回傳內容，請再試一次。' });
           }
-        } else if (!full.trim()) {
-          send({ t: 'err', e: 'AI 沒有回傳內容，請再試一次。' });
+        } else {
+          const html = extractHtml(answer);
+          if (html) {
+            version = (latest?.version || 0) + 1;
+            if (html.length <= 400_000) {
+              await db.prepare('INSERT INTO versions (project_id, version, html, bytes, created_at) VALUES (?, ?, ?, ?, ?)')
+                .bind(proj.id, version, html, html.length, new Date().toISOString()).run();
+              saved = html.length;
+            } else {
+              version = null;
+              send({ t: 'err', e: '產生的網頁超過 400KB，沒有存成新版本。' });
+            }
+          } else if (!answer.trim()) {
+            send({ t: 'err', e: 'AI 沒有回傳內容，請再試一次。' });
+          }
         }
-        await db.prepare('INSERT INTO messages (project_id, role, content, version, created_at) VALUES (?, ?, ?, ?, ?)')
-          .bind(proj.id, 'assistant', full, version, new Date().toISOString()).run();
+        await db.prepare('INSERT INTO messages (project_id, role, content, reasoning, version, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+          .bind(proj.id, 'assistant', answer, think, version, new Date().toISOString()).run();
         await db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').bind(new Date().toISOString(), proj.id).run();
-        send({ t: 'done', version, bytes: html ? html.length : 0 });
+        send({ t: 'done', version, bytes: saved, mode: proj.mode });
       } catch (e) {
         send({ t: 'err', e: String(e?.message || e) });
       } finally {
@@ -379,14 +577,176 @@ async function chat(request, env, db, userId, projectId) {
   });
 }
 
-// ---------- 產生出來的網站（公開） ----------
+// ---------- 全端專案的執行環境 ----------
 
-async function serveApp(db, id, v) {
+// 每個全端專案一個 SQLite Durable Object（名字 p<專案id>），當作它專屬的 D1
+export class ProjectDb extends DurableObject {
+  async init({ schema }) {
+    const cur = (schema || '').trim();
+    const applied = await this.ctx.storage.kv.get('schema') || '';
+    if (!cur || cur === applied) return { ok: true };
+    try {
+      this.ctx.storage.sql.exec(cur);
+      await this.ctx.storage.kv.put('schema', cur);
+      return { ok: true, applied: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  }
+
+  async exec({ sql, params = [], mode, col }) {
+    try {
+      const db = this.ctx.storage.sql;
+      const cursor = db.exec(sql, ...params);
+      const rows = cursor.toArray();
+      const changes = cursor.rowsWritten ?? 0;
+      if (mode === 'first') {
+        const row = rows[0] ?? null;
+        return { value: col != null ? (row ? row[col] : null) : row };
+      }
+      if (mode === 'raw') return { rows };
+      let lastRowId = null;
+      if (mode === 'run' && /\binsert\b/i.test(sql)) {
+        lastRowId = db.exec('SELECT last_insert_rowid() AS id').one().id;
+      }
+      return { rows, changes, lastRowId };
+    } catch (e) {
+      return { error: String(e?.message || e) };
+    }
+  }
+}
+
+const dbErr = (r) => { throw new Error(`D1_ERROR: ${r.error}`); };
+
+// D1 相容介面（prepare/bind/all/first/run/raw/batch/exec），背後走 ProjectDb
+function makeD1(stub) {
+  const exec = (body) => stub.exec(body).then((r) => (r.error ? dbErr(r) : r));
+  return {
+    prepare(sql) {
+      const stmt = { sql, params: [] };
+      stmt.bind = (...p) => { stmt.params = p; return stmt; };
+      stmt.run = async () => {
+        const r = await exec({ sql, params: stmt.params, mode: 'run' });
+        return { success: true, meta: { changes: r.changes ?? 0, last_row_id: r.lastRowId ?? null, duration: 0 } };
+      };
+      stmt.all = async () => {
+        const r = await exec({ sql, params: stmt.params, mode: 'all' });
+        return { results: r.rows ?? [], success: true, meta: { changes: r.changes ?? 0, duration: 0 } };
+      };
+      stmt.first = async (col) => (await exec({ sql, params: stmt.params, mode: 'first', col })).value;
+      stmt.raw = async () => (await exec({ sql, params: stmt.params, mode: 'raw' })).rows ?? [];
+      return stmt;
+    },
+    async batch(stmts) {
+      const out = [];
+      for (const s of stmts) out.push(await s.run());
+      return out;
+    },
+    async exec(sql) {
+      const r = await exec({ sql, mode: 'raw' });
+      return { count: (r.rows ?? []).length };
+    },
+    async dump() { return null; },
+  };
+}
+
+const MIME = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', json: 'application/json', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', ico: 'image/x-icon' };
+const mimeOf = (p) => MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream';
+
+// env.ASSETS：從 version_files 回傳前端檔案
+function makeAssets(files) {
+  return {
+    async fetch(request) {
+      const p = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '');
+      const key = p === '' || p === 'index.html' ? 'public/index.html'
+        : files.has('public/' + p) ? 'public/' + p
+        : files.has(p) ? p : 'public/index.html'; // SPA fallback
+      const content = files.get(key);
+      if (content == null) return new Response('Not found', { status: 404 });
+      return new Response(content, { headers: { 'content-type': mimeOf(key) } });
+    },
+  };
+}
+
+const html404 = (msg) => new Response(`<h1>${msg}</h1>`, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8' } });
+
+const genCache = new Map(); // "id:version" → { files, worker, dbStub }
+
+// 載入產生的 src/worker.js（export default { fetch }，不可使用 import）
+function loadGenWorker(code) {
+  if (/^\s*import\s/m.test(code)) throw new Error('產生的 worker.js 使用了 import，無法在 app-builder 內執行。請請 AI 改成單檔、只用 export default。');
+  const js = code.replace(/export\s+default\s*/, 'const __default =');
+  return new Function(js + '\n;return typeof __default !== "undefined" ? __default : null;')();
+}
+
+async function serveGenerated(request, env, db, id, rest, search, v) {
+  const proj = await db.prepare('SELECT id, mode, name FROM projects WHERE id = ?').bind(id).first();
+  if (!proj) return html404('找不到這個 app');
+  const ver = v || (await db.prepare('SELECT MAX(version) AS v FROM version_files WHERE project_id = ?').bind(id).first())?.v;
+  if (!ver) return html404('這個專案還沒有產出任何版本');
+
+  const key = id + ':' + ver;
+  let entry = genCache.get(key);
+  if (!entry) {
+    const rows = (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ?')
+      .bind(id, ver).all()).results;
+    const files = new Map(rows.map((r) => [r.path, r.content]));
+    entry = { files, worker: null, note: '' };
+    const code = files.get('src/worker.js');
+    if (code) {
+      try { entry.worker = loadGenWorker(code); }
+      catch (e) { entry.note = String(e?.message || e); }
+    }
+    const schema = files.get('schema.sql');
+    if (schema) await env.PROJECT_DB.getByName('p' + id).init({ schema });
+    entry.dbStub = env.PROJECT_DB.getByName('p' + id);
+    genCache.set(key, entry);
+    if (genCache.size > 50) genCache.delete(genCache.keys().next().value);
+  }
+
+  const envForGen = { DB: makeD1(entry.dbStub), ASSETS: makeAssets(entry.files) };
+
+  // API 路徑 → 交給產生的 worker
+  if (entry.worker && (rest.startsWith('/api/') || rest === '/api')) {
+    const u = new URL('https://generated.local' + rest + (search ? '?' + search : ''));
+    const req2 = new Request(u, request);
+    try {
+      return await entry.worker.fetch(req2, envForGen, { waitUntil() {}, passThroughOnException() {} });
+    } catch (e) {
+      return json({ error: `產生的 app 執行錯誤：${e?.message || e}` }, 500);
+    }
+  }
+
+  // 其他路徑 → 靜態檔案（找不到就回 index.html，SPA 友善）
+  const p = decodeURIComponent(rest).replace(/^\/+/, '') || 'index.html';
+  const keys = p === 'index.html' ? ['public/index.html'] : ['public/' + p, p];
+  let content = null;
+  for (const k of keys) if (entry.files.has(k)) { content = entry.files.get(k); break; }
+  if (content == null) content = entry.files.get('public/index.html') ?? `<h1>Not found</h1><pre>${entry.note || ''}</pre>`;
+  return new Response(content, { headers: { 'content-type': mimeOf(p === 'index.html' ? 'a.html' : p), 'cache-control': 'no-store' } });
+}
+
+// ---------- 靜態網站（公開） ----------
+
+async function serveStaticApp(db, id, v) {
   const row = v
     ? await db.prepare('SELECT html FROM versions WHERE project_id = ? AND version = ?').bind(id, v).first()
     : await db.prepare('SELECT html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
-  if (!row) return new Response('<h1>找不到這個 app</h1>', { status: 404, headers: { 'content-type': 'text/html; charset=utf-8' } });
+  if (!row) return html404('找不到這個 app');
   return new Response(row.html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+}
+
+async function serveApp(request, env, db, id, rest, search, v) {
+  const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(id).first();
+  if (!proj) return html404('找不到這個 app');
+  if (proj.mode === 'full') {
+    // 掛在 /apps/<id>/ 底下，前端才能用相對路徑呼叫自己的 API
+    if ((rest === '' || rest === '/') && !new URL(request.url).pathname.endsWith('/')) {
+      return Response.redirect(new URL(`/apps/${id}/${search ? '?' + search : ''}`, request.url), 307);
+    }
+    return serveGenerated(request, env, db, id, rest, search, v);
+  }
+  return serveStaticApp(db, id, v);
 }
 
 // ---------- ZIP 打包（deflate 可用就用，否則 store） ----------
@@ -491,22 +851,58 @@ const READMD = (name) => `# ${name}
 放到一個有 wrangler.jsonc 的專案資料夾（assets 指到這裡），執行 rucloud dev 資料夾名稱。
 `;
 
+const READMD_FULL = (name) => `# ${name}（Cloudflare Workers 全端專案）
+
+由 AppForge（rucloud examples/app-builder）的 AI 產生的完整專案：Worker API + D1 資料庫 + 前端。
+
+## 在 rucloud 執行
+    rucloud dev 本資料夾 --d1-init DB=schema.sql
+
+## 部署到 Cloudflare
+    npm install -g wrangler（若尚未安裝）
+    wrangler d1 create <資料庫名稱>   # 把 database_id 填進 wrangler.jsonc
+    wrangler d1 execute <資料庫名稱> --file=schema.sql --remote
+    wrangler deploy
+`;
+
 async function downloadZip(env, db, userId, projectId, v) {
   return handle(async () => {
     const proj = await requireProject(db, userId, projectId);
-    const row = v
-      ? await db.prepare('SELECT version, html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, v).first()
-      : await db.prepare('SELECT version, html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').bind(proj.id).first();
-    if (!row) throw new HttpError(404, '還沒有任何版本');
-    const zip = await makeZip([
-      { name: 'index.html', data: new TextEncoder().encode(row.html) },
-      { name: 'README.md', data: new TextEncoder().encode(READMD(proj.name)) },
-    ]);
-    const ascii = `app-${proj.id}-v${row.version}.zip`;
+    const enc = new TextEncoder();
+    const files = [];
+    let version;
+    if (proj.mode === 'full') {
+      const ver = v || (await db.prepare('SELECT MAX(version) AS v FROM version_files WHERE project_id = ?').bind(proj.id).first())?.v;
+      const rows = ver
+        ? (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ? ORDER BY path')
+            .bind(proj.id, ver).all()).results
+        : [];
+      if (!rows.length) throw new HttpError(404, '還沒有任何版本');
+      version = ver;
+      const paths = new Set(rows.map((r) => r.path));
+      if (!paths.has('wrangler.jsonc')) {
+        rows.push({ path: 'wrangler.jsonc', content: wranglerFor(proj.name) });
+      }
+      for (const r of rows) {
+        // 目錄結構照 path 原樣放進 zip
+        files.push({ name: r.path, data: enc.encode(r.content) });
+      }
+      files.push({ name: 'README.md', data: enc.encode(READMD_FULL(proj.name)) });
+    } else {
+      const row = v
+        ? await db.prepare('SELECT version, html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, v).first()
+        : await db.prepare('SELECT version, html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').bind(proj.id).first();
+      if (!row) throw new HttpError(404, '還沒有任何版本');
+      version = row.version;
+      files.push({ name: 'index.html', data: enc.encode(row.html) });
+      files.push({ name: 'README.md', data: enc.encode(READMD(proj.name)) });
+    }
+    const zip = await makeZip(files);
+    const ascii = `app-${proj.id}-v${version}.zip`;
     return new Response(zip, {
       headers: {
         'content-type': 'application/zip',
-        'content-disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${proj.name}-v${row.version}.zip`)}`,
+        'content-disposition': `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(`${proj.name}-v${version}.zip`)}`,
         'cache-control': 'no-store',
       },
     });
@@ -521,9 +917,12 @@ export default {
     const p = url.pathname;
     const db = env.DB;
     if (!db) return json({ error: '缺少 D1 綁定 DB' }, 500);
+    await ensureSchema(db);
 
-    const app = p.match(/^\/apps\/(\d+)$/);
-    if (app) return serveApp(db, Number(app[1]), url.searchParams.get('v'));
+    let m;
+    if ((m = p.match(/^\/apps\/(\d+)(\/.*)?$/))) {
+      return serveApp(request, env, db, Number(m[1]), m[2] || '/', url.search, url.searchParams.get('v'));
+    }
 
     if (p === '/api/register') return register(request, env, db);
     if (p === '/api/login') return login(request, env, db);
@@ -536,16 +935,15 @@ export default {
     if (p === '/api/settings' && request.method === 'PUT') return saveSettings(request, env, db, userId);
     if (p === '/api/projects' && request.method === 'GET') return listProjects(db, userId);
     if (p === '/api/projects' && request.method === 'POST') return createProject(request, db, userId);
-    let m;
     if ((m = p.match(/^\/api\/projects\/(\d+)$/))) {
       if (request.method === 'GET') return getProject(db, userId, Number(m[1]));
       if (request.method === 'DELETE') return deleteProject(db, userId, Number(m[1]));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/chat$/)) && request.method === 'POST') {
-      return chat(request, env, db, userId, Number(m[1]));
+      return handle(() => chat(request, env, db, userId, Number(m[1])));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/versions\/(\d+)$/))) {
-      return versionHtml(db, userId, Number(m[1]), Number(m[2]));
+      return versionHtml(db, userId, Number(m[1]), Number(m[2]), url.searchParams.get('path'));
     }
     if ((m = p.match(/^\/api\/projects\/(\d+)\/download$/)) && request.method === 'GET') {
       return downloadZip(env, db, userId, Number(m[1]), url.searchParams.get('v'));

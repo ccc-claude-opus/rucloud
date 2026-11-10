@@ -4,5 +4,5 @@
   "main": "src/worker.js",
   "compatibility_date": "2025-11-01",
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": ["/api/*"] },
-  "d1_databases": [{ "binding": "DB", "database_name": "music-db", "database_id": "local" }]
+  "d1_databases": [{ "binding": "DB", "database_name": "music-db", "database_id": "ba1809f4-6d8e-4083-9864-9bbf73879671" }]
 }
