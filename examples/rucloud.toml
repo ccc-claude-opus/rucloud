@@ -55,6 +55,13 @@ path = "app-builder"
 port = 8717
 d1_init = { DB = "schema.sql" }
 
+# 執行 app-builder 產生的 app（另一個程序、另一個主機名稱：http://127.0.0.1:8719）
+[[app]]
+path = "app-builder/runner"
+port = 8719
+max_block_ms = 5000
+memory_mb = 256
+
 # 棋藝軒：棋類桌遊對戰平台（Durable Object + WebSocket hibernation，React 前端）
 [[app]]
 path = "boardgame"

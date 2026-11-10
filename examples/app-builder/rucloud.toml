@@ -1,0 +1,16 @@
+# app-builder 與執行產生 app 的 app-runner 一起跑：rucloud serve examples/app-builder/rucloud.toml
+#   app-builder：http://localhost:8717
+#   app-runner ：http://127.0.0.1:8719（主機名稱必須和 app-builder 不同，見 README）
+state_dir = "../../.rucloud"
+
+[[app]]
+path = "."
+port = 8717
+d1_init = { DB = "schema.sql" }
+
+[[app]]
+path = "runner"
+port = 8719
+# 產生的程式碼卡住（例如無窮迴圈）5 秒就重開 runner，不影響 app-builder
+max_block_ms = 5000
+memory_mb = 256

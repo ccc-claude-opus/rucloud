@@ -1,12 +1,12 @@
 // app-builder：AI 網站產生器（rucloud 專用）
 //   /api/*            帳號（註冊/登入，HMAC 簽章 cookie）、AI 設定、專案與對話（SSE 串流）
-//   /apps/:id/...     產生出來的 app：靜態網站直接回傳；全端專案由「內建執行環境」跑
-//                     （動態載入 src/worker.js，env.DB 是該專案專屬的 SQLite Durable Object）
+//   /apps/:id/...     轉址到 app-runner（另一個應用、另一個主機名稱）執行產生出來的 app
+//   Files（RPC）      給 app-runner 讀專案檔案，只能透過 service binding 呼叫
 //   其他              靜態檔案（public/，由 Assets 提供）
 // AI 金鑰：使用者可在「AI 設定」填自己的 key（存 D1）；沒填就用環境變數
 //   NVIDIA_API_KEY / MINIMAX_API_KEY（.dev.vars 或 rucloud.toml 的 env_file）。
 
-import { DurableObject } from 'cloudflare:workers';
+import { WorkerEntrypoint } from 'cloudflare:workers';
 
 const COOKIE = 'session';
 const SESSION_DAYS = 30;
@@ -276,7 +276,7 @@ async function login(request, env, db) {
 
 // ---------- AI 設定 ----------
 
-async function mePayload(db, env, userId) {
+async function mePayload(db, env, userId, runnerUrl) {
   const user = await db.prepare('SELECT id, email FROM users WHERE id = ?').bind(userId).first();
   if (!user) throw new HttpError(401, '帳號不存在');
   const s = await getSettings(db, userId);
@@ -289,6 +289,7 @@ async function mePayload(db, env, userId) {
       hasKey: !!s.api_key,
       keyTail: s.api_key ? s.api_key.slice(-4) : '',
     },
+    runnerUrl,
     providers: Object.entries(PROVIDERS).map(([id, p]) => ({
       id, name: p.name, model: p.model,
       hasEnvKey: !!(p.envKey && env[p.envKey]),
@@ -310,7 +311,7 @@ async function saveSettings(request, env, db, userId) {
       String(b.baseUrl || '').trim().slice(0, 200),
       String(b.model || '').trim().slice(0, 100),
       apiKey.slice(0, 300), new Date().toISOString()).run();
-    return json(await mePayload(db, env, userId));
+    return json(await mePayload(db, env, userId, runnerUrl(request, env)));
   });
 }
 
@@ -577,176 +578,49 @@ async function chat(request, env, db, userId, projectId) {
   });
 }
 
-// ---------- 全端專案的執行環境 ----------
+// ---------- 產生的 app：交給 app-runner 執行 ----------
 
-// 每個全端專案一個 SQLite Durable Object（名字 p<專案id>），當作它專屬的 D1
-export class ProjectDb extends DurableObject {
-  async init({ schema }) {
-    const cur = (schema || '').trim();
-    const applied = await this.ctx.storage.kv.get('schema') || '';
-    if (!cur || cur === applied) return { ok: true };
-    try {
-      this.ctx.storage.sql.exec(cur);
-      await this.ctx.storage.kv.put('schema', cur);
-      return { ok: true, applied: true };
-    } catch (e) {
-      return { ok: false, error: String(e?.message || e) };
-    }
+// 產生的 app 由另一個應用 app-runner 執行（另一個 Node 程序、另一個主機名稱），
+// 它碰不到這裡的 env（AUTH_SECRET、AI 金鑰）與帳號資料庫，瀏覽器也不會把這裡的登入 cookie 送過去。
+// app-runner 透過 service binding 的 RPC 呼叫下面的 Files 拿專案檔案；公開網路呼叫不到它。
+export class Files extends WorkerEntrypoint {
+  // 版本號 v 沒給就用最新的；回傳 { mode, version } 或 null
+  async resolve(id, v) {
+    const db = this.env.DB;
+    await ensureSchema(db);
+    const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(Number(id)).first();
+    if (!proj) return null;
+    const table = proj.mode === 'full' ? 'version_files' : 'versions';
+    const row = v
+      ? await db.prepare(`SELECT version FROM ${table} WHERE project_id = ? AND version = ? LIMIT 1`).bind(proj.id, Number(v)).first()
+      : await db.prepare(`SELECT MAX(version) AS version FROM ${table} WHERE project_id = ?`).bind(proj.id).first();
+    return row?.version ? { mode: proj.mode, version: row.version } : null;
   }
 
-  async exec({ sql, params = [], mode, col }) {
-    try {
-      const db = this.ctx.storage.sql;
-      const cursor = db.exec(sql, ...params);
-      const rows = cursor.toArray();
-      const changes = cursor.rowsWritten ?? 0;
-      if (mode === 'first') {
-        const row = rows[0] ?? null;
-        return { value: col != null ? (row ? row[col] : null) : row };
-      }
-      if (mode === 'raw') return { rows };
-      let lastRowId = null;
-      if (mode === 'run' && /\binsert\b/i.test(sql)) {
-        lastRowId = db.exec('SELECT last_insert_rowid() AS id').one().id;
-      }
-      return { rows, changes, lastRowId };
-    } catch (e) {
-      return { error: String(e?.message || e) };
+  // 某個版本的檔案：[{ path, content }]；靜態網站只有 index.html
+  async files(id, version) {
+    const db = this.env.DB;
+    const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(Number(id)).first();
+    if (!proj) return [];
+    if (proj.mode === 'full') {
+      return (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ?')
+        .bind(proj.id, Number(version)).all()).results;
     }
+    const row = await db.prepare('SELECT html FROM versions WHERE project_id = ? AND version = ?').bind(proj.id, Number(version)).first();
+    return row ? [{ path: 'index.html', content: row.html }] : [];
   }
 }
 
-const dbErr = (r) => { throw new Error(`D1_ERROR: ${r.error}`); };
-
-// D1 相容介面（prepare/bind/all/first/run/raw/batch/exec），背後走 ProjectDb
-function makeD1(stub) {
-  const exec = (body) => stub.exec(body).then((r) => (r.error ? dbErr(r) : r));
-  return {
-    prepare(sql) {
-      const stmt = { sql, params: [] };
-      stmt.bind = (...p) => { stmt.params = p; return stmt; };
-      stmt.run = async () => {
-        const r = await exec({ sql, params: stmt.params, mode: 'run' });
-        return { success: true, meta: { changes: r.changes ?? 0, last_row_id: r.lastRowId ?? null, duration: 0 } };
-      };
-      stmt.all = async () => {
-        const r = await exec({ sql, params: stmt.params, mode: 'all' });
-        return { results: r.rows ?? [], success: true, meta: { changes: r.changes ?? 0, duration: 0 } };
-      };
-      stmt.first = async (col) => (await exec({ sql, params: stmt.params, mode: 'first', col })).value;
-      stmt.raw = async () => (await exec({ sql, params: stmt.params, mode: 'raw' })).rows ?? [];
-      return stmt;
-    },
-    async batch(stmts) {
-      const out = [];
-      for (const s of stmts) out.push(await s.run());
-      return out;
-    },
-    async exec(sql) {
-      const r = await exec({ sql, mode: 'raw' });
-      return { count: (r.rows ?? []).length };
-    },
-    async dump() { return null; },
-  };
-}
-
-const MIME = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', json: 'application/json', svg: 'image/svg+xml', png: 'image/png', jpg: 'image/jpeg', ico: 'image/x-icon' };
-const mimeOf = (p) => MIME[p.split('.').pop().toLowerCase()] || 'application/octet-stream';
-
-// env.ASSETS：從 version_files 回傳前端檔案
-function makeAssets(files) {
-  return {
-    async fetch(request) {
-      const p = decodeURIComponent(new URL(request.url).pathname).replace(/^\/+/, '');
-      const key = p === '' || p === 'index.html' ? 'public/index.html'
-        : files.has('public/' + p) ? 'public/' + p
-        : files.has(p) ? p : 'public/index.html'; // SPA fallback
-      const content = files.get(key);
-      if (content == null) return new Response('Not found', { status: 404 });
-      return new Response(content, { headers: { 'content-type': mimeOf(key) } });
-    },
-  };
-}
-
-const html404 = (msg) => new Response(`<h1>${msg}</h1>`, { status: 404, headers: { 'content-type': 'text/html; charset=utf-8' } });
-
-const genCache = new Map(); // "id:version" → { files, worker, dbStub }
-
-// 載入產生的 src/worker.js（export default { fetch }，不可使用 import）
-function loadGenWorker(code) {
-  if (/^\s*import\s/m.test(code)) throw new Error('產生的 worker.js 使用了 import，無法在 app-builder 內執行。請請 AI 改成單檔、只用 export default。');
-  const js = code.replace(/export\s+default\s*/, 'const __default =');
-  return new Function(js + '\n;return typeof __default !== "undefined" ? __default : null;')();
-}
-
-async function serveGenerated(request, env, db, id, rest, search, v) {
-  const proj = await db.prepare('SELECT id, mode, name FROM projects WHERE id = ?').bind(id).first();
-  if (!proj) return html404('找不到這個 app');
-  const ver = v || (await db.prepare('SELECT MAX(version) AS v FROM version_files WHERE project_id = ?').bind(id).first())?.v;
-  if (!ver) return html404('這個專案還沒有產出任何版本');
-
-  const key = id + ':' + ver;
-  let entry = genCache.get(key);
-  if (!entry) {
-    const rows = (await db.prepare('SELECT path, content FROM version_files WHERE project_id = ? AND version = ?')
-      .bind(id, ver).all()).results;
-    const files = new Map(rows.map((r) => [r.path, r.content]));
-    entry = { files, worker: null, note: '' };
-    const code = files.get('src/worker.js');
-    if (code) {
-      try { entry.worker = loadGenWorker(code); }
-      catch (e) { entry.note = String(e?.message || e); }
-    }
-    const schema = files.get('schema.sql');
-    if (schema) await env.PROJECT_DB.getByName('p' + id).init({ schema });
-    entry.dbStub = env.PROJECT_DB.getByName('p' + id);
-    genCache.set(key, entry);
-    if (genCache.size > 50) genCache.delete(genCache.keys().next().value);
-  }
-
-  const envForGen = { DB: makeD1(entry.dbStub), ASSETS: makeAssets(entry.files) };
-
-  // API 路徑 → 交給產生的 worker
-  if (entry.worker && (rest.startsWith('/api/') || rest === '/api')) {
-    const u = new URL('https://generated.local' + rest + (search ? '?' + search : ''));
-    const req2 = new Request(u, request);
-    try {
-      return await entry.worker.fetch(req2, envForGen, { waitUntil() {}, passThroughOnException() {} });
-    } catch (e) {
-      return json({ error: `產生的 app 執行錯誤：${e?.message || e}` }, 500);
-    }
-  }
-
-  // 其他路徑 → 靜態檔案（找不到就回 index.html，SPA 友善）
-  const p = decodeURIComponent(rest).replace(/^\/+/, '') || 'index.html';
-  const keys = p === 'index.html' ? ['public/index.html'] : ['public/' + p, p];
-  let content = null;
-  for (const k of keys) if (entry.files.has(k)) { content = entry.files.get(k); break; }
-  if (content == null) content = entry.files.get('public/index.html') ?? `<h1>Not found</h1><pre>${entry.note || ''}</pre>`;
-  return new Response(content, { headers: { 'content-type': mimeOf(p === 'index.html' ? 'a.html' : p), 'cache-control': 'no-store' } });
-}
-
-// ---------- 靜態網站（公開） ----------
-
-async function serveStaticApp(db, id, v) {
-  const row = v
-    ? await db.prepare('SELECT html FROM versions WHERE project_id = ? AND version = ?').bind(id, v).first()
-    : await db.prepare('SELECT html FROM versions WHERE project_id = ? ORDER BY version DESC LIMIT 1').bind(id).first();
-  if (!row) return html404('找不到這個 app');
-  return new Response(row.html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
-}
-
-async function serveApp(request, env, db, id, rest, search, v) {
-  const proj = await db.prepare('SELECT id, mode FROM projects WHERE id = ?').bind(id).first();
-  if (!proj) return html404('找不到這個 app');
-  if (proj.mode === 'full') {
-    // 掛在 /apps/<id>/ 底下，前端才能用相對路徑呼叫自己的 API
-    if ((rest === '' || rest === '/') && !new URL(request.url).pathname.endsWith('/')) {
-      return Response.redirect(new URL(`/apps/${id}/${search ? '?' + search : ''}`, request.url), 307);
-    }
-    return serveGenerated(request, env, db, id, rest, search, v);
-  }
-  return serveStaticApp(db, id, v);
+// app-runner 的網址：環境變數 RUNNER_URL；沒設時依目前的主機推算（主機名稱一定要和這裡不同）
+//   localhost:8717 → http://127.0.0.1:8719、127.0.0.1:8717 → http://localhost:8719
+//   app-builder.localhost:8700（edge）→ app-runner.localhost:8700
+function runnerUrl(request, env) {
+  if (env.RUNNER_URL) return env.RUNNER_URL.replace(/\/+$/, '');
+  const u = new URL(request.url);
+  if (u.hostname.startsWith('app-builder.')) return `${u.protocol}//app-runner.${u.host.slice('app-builder.'.length)}`;
+  if (u.hostname === 'localhost') return `${u.protocol}//127.0.0.1:8719`;
+  if (u.hostname === '127.0.0.1') return `${u.protocol}//localhost:8719`;
+  return null; // 正式網域請設定 RUNNER_URL（例如 https://apps.example.com）
 }
 
 // ---------- ZIP 打包（deflate 可用就用，否則 store） ----------
@@ -920,8 +794,19 @@ export default {
     await ensureSchema(db);
 
     let m;
-    if ((m = p.match(/^\/apps\/(\d+)(\/.*)?$/))) {
-      return serveApp(request, env, db, Number(m[1]), m[2] || '/', url.search, url.searchParams.get('v'));
+    if (p.startsWith('/apps/')) {
+      const base = runnerUrl(request, env);
+      if (!base) return json({ error: '沒有設定 RUNNER_URL（app-runner 的網址）' }, 500);
+      return Response.redirect(base + p + url.search, 302);
+    }
+
+    // 防 CSRF：會改資料的 API 只接受同一個來源的請求
+    if (p.startsWith('/api/') && request.method !== 'GET' && request.method !== 'HEAD') {
+      const site = request.headers.get('sec-fetch-site');
+      const origin = request.headers.get('origin');
+      if ((site && site !== 'same-origin' && site !== 'none') || (origin && origin !== url.origin)) {
+        return json({ error: '不接受跨站請求' }, 403);
+      }
     }
 
     if (p === '/api/register') return register(request, env, db);
@@ -931,7 +816,7 @@ export default {
     const userId = await currentUserId(request, env);
     if (!userId) return json({ error: '請先登入' }, 401);
 
-    if (p === '/api/me') return handle(async () => json(await mePayload(db, env, userId)));
+    if (p === '/api/me') return handle(async () => json(await mePayload(db, env, userId, runnerUrl(request, env))));
     if (p === '/api/settings' && request.method === 'PUT') return saveSettings(request, env, db, userId);
     if (p === '/api/projects' && request.method === 'GET') return listProjects(db, userId);
     if (p === '/api/projects' && request.method === 'POST') return createProject(request, db, userId);

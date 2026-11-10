@@ -103,7 +103,7 @@ details.think summary { cursor:pointer; color:var(--mut); font-size:12px }
     <nav id="side">
       <button class="new" id="newp" style="width:100%">＋ 新專案</button>
       <div id="plist"></div>
-      <div class="mut">產生的網站在 /apps/<id><br>公開、可直接分享</div>
+      <div class="mut">產生的網站由 app-runner 執行<br>公開、可直接分享</div>
     </nav>
     <div id="work">
       <div id="chat">
@@ -123,7 +123,7 @@ details.think summary { cursor:pointer; color:var(--mut); font-size:12px }
           <a id="dl" style="font-size:13px;color:var(--ac)">⬇ 下載 zip</a>
         </div>
         <div id="fband" class="hidden" style="background:#3a2f14;color:#ffd166;font-size:12px;padding:5px 10px">⚙ 全端專案：預覽只會呈現前端畫面（後端 API 不在此執行）。下載 zip 後執行 <b>rucloud dev 資料夾 --d1-init DB=schema.sql</b> 即可連同資料庫一起跑。</div>
-        <div id="frame-wrap"><iframe id="frame"></iframe><pre id="code" class="hidden"></pre></div>
+        <div id="frame-wrap"><iframe id="frame" sandbox="allow-scripts allow-forms allow-popups allow-modals allow-same-origin allow-downloads"></iframe><pre id="code" class="hidden"></pre></div>
       </div>
     </div>
   </div>
@@ -202,7 +202,7 @@ async function refreshProject() {
   const v = curData.latest;
   $('#vsel').innerHTML = curData.versions.map((x) => `<option value="${x.version}">v${x.version}（${(x.bytes / 1024).toFixed(1)} KB）</option>`).join('') || '<option value="">尚無版本</option>';
   $('#vsel').value = v || '';
-  $('#open').href = v ? `/apps/${cur}/?v=${v}` : '#';
+  $('#open').href = v ? appUrl(v) : '#';
   $('#dl').href = v ? `/api/projects/${cur}/download?v=${v}` : '#';
   $('#fband').classList.toggle('hidden', curData.project.mode !== 'full');
   $('#fband').innerHTML = curData.project.mode === 'full'
@@ -215,8 +215,11 @@ async function refreshProject() {
   else loadCode();
 }
 
+// 產生的 app 在 app-runner（另一個主機名稱）上
+const appUrl = (v) => `${me?.runnerUrl || ''}/apps/${cur}/?v=${v}`;
+
 function setFrame(v) {
-  $('#frame').src = v ? `/apps/${cur}/?v=${v}&r=${Date.now()}` : 'about:blank';
+  $('#frame').src = v ? `${appUrl(v)}&r=${Date.now()}` : 'about:blank';
 }
 async function loadCode() {
   if (!curData?.latest) { $('#code').textContent = '（還沒有版本）'; return; }
@@ -231,7 +234,7 @@ async function loadCode() {
   }
 }
 $('#fsel').onchange = loadCode;
-$('#vsel').onchange = () => { mode === 'view' ? setFrame(+$('#vsel').value) : loadCode(); $('#open').href = `/apps/${cur}/?v=${$('#vsel').value}`; $('#dl').href = `/api/projects/${cur}/download?v=${$('#vsel').value}`; };
+$('#vsel').onchange = () => { mode === 'view' ? setFrame(+$('#vsel').value) : loadCode(); $('#open').href = appUrl($('#vsel').value); $('#dl').href = `/api/projects/${cur}/download?v=${$('#vsel').value}`; };
 $('#ptabs').onclick = (e) => {
   const b = e.target.closest('[data-v]'); if (!b) return;
   mode = b.dataset.v;
