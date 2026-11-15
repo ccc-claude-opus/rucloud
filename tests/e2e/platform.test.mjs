@@ -86,6 +86,22 @@ test('R2：上傳、下載、列表、multipart', async () => {
   assert.match(mp.body.etag, /-2$/);
 });
 
+test('showcase 的上傳限制：最大 32 KB、最多保留 30 個（刪最舊的）', async () => {
+  const big = await fetch(url('showcase', '/api/r2?key=lim/big.txt'), { method: 'PUT', body: 'x'.repeat(32 * 1024 + 1) });
+  assert.equal(big.status, 413);
+  assert.equal((await fetch(url('showcase', '/api/r2?key=lim/big.txt'))).status, 404, '太大的沒有存進去');
+  for (let i = 0; i < 31; i++) {
+    const r = await fetch(url('showcase', `/api/r2?key=lim/${i}.txt`), { method: 'PUT', body: String(i) });
+    assert.equal(r.status, 200);
+  }
+  assert.equal((await fetch(url('showcase', '/api/r2?key=lim/30.txt'))).status, 200);
+  // 清單裡最舊的（包含前一個測試上傳的 t/a.txt）被刪掉，總數維持 30
+  assert.equal((await fetch(url('showcase', '/api/r2?key=t/a.txt'))).status, 404);
+  const keys = (await json(url('showcase', '/api/r2'))).body.objects.map((o) => o.key).filter((k) => k.startsWith('lim/'));
+  assert.equal(keys.length, 30);
+  assert.ok(!keys.includes('lim/0.txt') && keys.includes('lim/1.txt') && keys.includes('lim/30.txt'), keys.join(' '));
+});
+
 test('Queues：送出後消費者會處理', async () => {
   const before = (await json(url('showcase', '/api/queue'))).body.done;
   for (let i = 0; i < 20; i++) {

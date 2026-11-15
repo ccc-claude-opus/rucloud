@@ -1,5 +1,9 @@
 // rucloud 的綁定示範。每個 /api/<名稱> 示範一種綁定，回傳 JSON。
+
 import { DurableObject } from 'cloudflare:workers';
+
+const MAX_UPLOAD = 32 * 1024; // 上傳的檔案最大 32 KB
+const MAX_FILES = 30; // 透過 /api/r2 上傳的檔案最多保留 30 個
 
 // Durable Object：強一致的計數器（同一個名稱永遠是同一個實例）
 export class Counter extends DurableObject {
@@ -37,11 +41,23 @@ export default {
       return json({ visits: n, list: await env.KV.list({ prefix: 'vis' }) });
     }
 
+    // 上傳：公開網站上任何人都能呼叫，所以限制大小與數量（超過就刪掉最舊的），硬碟才不會被塞滿
     if (p === '/api/r2' && request.method === 'PUT') {
-      const obj = await env.FILES.put(url.searchParams.get('key'), request.body, {
+      const key = String(url.searchParams.get('key') || '').slice(0, 200);
+      if (!key) return json({ error: '缺 key' }, 400);
+      if (Number(request.headers.get('content-length') || 0) > MAX_UPLOAD) return json({ error: `檔案最大 ${MAX_UPLOAD / 1024} KB` }, 413);
+      const body = await request.arrayBuffer();
+      if (body.byteLength > MAX_UPLOAD) return json({ error: `檔案最大 ${MAX_UPLOAD / 1024} KB` }, 413);
+      const obj = await env.FILES.put(key, body, {
         httpMetadata: { contentType: request.headers.get('content-type') || 'application/octet-stream' },
       });
-      return json({ key: obj.key, size: obj.size, etag: obj.etag });
+      // 用 KV 記住透過這裡上傳的檔案（不碰 bucket 裡其他來源的物件），超過上限就刪最舊的
+      const uploads = JSON.parse((await env.KV.get('uploads')) || '[]').filter((k) => k !== key);
+      uploads.push(key);
+      const removed = uploads.splice(0, Math.max(0, uploads.length - MAX_FILES));
+      if (removed.length) await env.FILES.delete(removed);
+      await env.KV.put('uploads', JSON.stringify(uploads));
+      return json({ key: obj.key, size: obj.size, etag: obj.etag, removed });
     }
     if (p === '/api/r2' && request.method === 'GET') {
       const key = url.searchParams.get('key');
@@ -99,7 +115,7 @@ export default {
       const visits = Number((await env.KV.get('visits')) || 0);
       return new HTMLRewriter()
         .on('h1', { element(el) { el.setInnerContent(`rucloud showcase（第 ${visits} 次造訪）`); } })
-        .on('p', { element(el) { el.after('<p><a href="/api/vars">看 vars</a></p>', { html: true }); } })
+        .on('p.intro', { element(el) { el.after('<p><a href="/api/vars">看 vars</a></p>', { html: true }); } })
         .transform(page);
     }
 

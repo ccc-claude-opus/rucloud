@@ -1,5 +1,211 @@
 <!doctype html>
+<html lang="zh-Hant">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rucloud showcase</title>
-<h1>rucloud showcase</h1>
-<p>靜態檔案由 Rust 直接回應；API 在 <code>/api/*</code>。</p>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #fff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+    --accent: #f38020; --accent-soft: #fff1e6; --code: #f2f2ee; --ok: #1a7f37; --err: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --card: #1d1d20; --text: #ececee; --muted: #9a9aa2; --line: #2c2c31;
+      --accent: #ff9a45; --accent-soft: #2e2116; --code: #26262b; --ok: #4ac26b; --err: #ff6b6b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: clamp(26px, 5vw, 36px); margin: 0 0 8px; letter-spacing: -0.02em; }
+  .intro { margin: 0 0 6px; color: var(--muted); max-width: 720px; }
+  .back { font-size: 14px; color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; margin-top: 28px; }
+  section {
+    display: flex; flex-direction: column; gap: 10px; padding: 18px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px; min-width: 0;
+  }
+  h2 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
+  h2 code { font-size: 12px; font-weight: 500; color: var(--muted); background: var(--code); padding: 1px 6px; border-radius: 6px; }
+  section p { margin: 0; font-size: 14px; color: var(--muted); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-size: 14px; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: #fff;
+  }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  input, textarea {
+    font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); width: 100%;
+  }
+  textarea { resize: vertical; min-height: 60px; }
+  pre {
+    margin: 0; padding: 10px; background: var(--code); border-radius: 8px; font-size: 12.5px;
+    white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; min-height: 2.6em;
+  }
+  pre:empty::before { content: '按下按鈕看結果'; color: var(--muted); }
+  .ok { color: var(--ok); } .err { color: var(--err); }
+  .big { font-size: 28px; font-weight: 700; }
+  ul.files { margin: 0; padding-left: 18px; font-size: 13px; max-height: 140px; overflow: auto; }
+  ul.files a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="#" id="home">← 所有範例</a>
+  <h1>rucloud showcase</h1>
+  <p class="intro">每張卡片示範一種 Cloudflare Workers 的綁定，按下去就會呼叫這個 Worker 的 <code>/api/*</code>，結果是真的在這台主機上執行出來的。靜態檔案（這一頁）由 Rust 直接回應。</p>
+
+  <div class="grid">
+    <section>
+      <h2>D1 資料庫 <code>env.DB</code></h2>
+      <p>SQLite 資料庫。每按一次新增一筆紀錄，回傳總筆數。</p>
+      <div class="row"><button data-api="/api/d1">新增一筆</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>KV <code>env.KV</code></h2>
+      <p>鍵值儲存。造訪計數存在 <code>visits</code> 這個鍵。</p>
+      <div class="row"><button data-api="/api/kv">計數 +1</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Durable Object <code>env.COUNTER</code></h2>
+      <p>強一致的計數器：同一個名稱永遠是同一個實例，同時有很多人按也不會算錯。</p>
+      <div class="row"><input id="do-name" value="global" style="width:140px" aria-label="計數器名稱"><button id="do-btn">+1</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Queues <code>env.JOBS</code></h2>
+      <p>送一個工作進佇列，背景的消費者（<code>queue()</code>）處理完會把完成數加一。稍後再按一次就會看到 done 增加。</p>
+      <div class="row"><button data-api="/api/queue">送出工作</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Cron <code>scheduled()</code></h2>
+      <p>排程每分鐘執行一次，把執行時間寫進 KV。</p>
+      <div class="row"><button data-api="/api/cron">看最後一次執行</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Vectorize <code>env.VECTORS</code></h2>
+      <p>向量搜尋：存入 cat、dog、car 三個向量，查詢最像 cat 的兩個。</p>
+      <div class="row"><button data-api="/api/vectors">搜尋</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Rate Limiting <code>env.LIMITER</code></h2>
+      <p>每個 IP 每 60 秒最多 3 次。按下去會連續送 5 個請求，超過的會被擋下（429）。</p>
+      <div class="row"><button id="limit-btn">連續送 5 次</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>Service binding <code>env.HELLO</code></h2>
+      <p>不經過網路，直接呼叫同一台 rucloud 上的另一個應用（hello）。</p>
+      <div class="row"><button data-api="/api/hello">呼叫 hello</button></div>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>R2 物件儲存 <code>env.FILES</code></h2>
+      <p>上傳一段文字成為檔案。示範用：每個檔案最大 32 KB，最多保留 30 個，超過會刪掉最舊的。</p>
+      <input id="r2-key" value="hello.txt" aria-label="檔名">
+      <textarea id="r2-text" aria-label="內容">哈囉，rucloud！</textarea>
+      <div class="row"><button id="r2-put">上傳</button><button class="ghost" id="r2-list">列出檔案</button></div>
+      <ul class="files" id="r2-files"></ul>
+      <pre></pre>
+    </section>
+
+    <section>
+      <h2>HTMLRewriter</h2>
+      <p>用串流的方式改寫 HTML：拿這一頁，把標題換成造訪次數，再插入一個連結。</p>
+      <div class="row"><a href="/api/page" target="_blank"><button>打開改寫後的頁面</button></a></div>
+    </section>
+
+    <section>
+      <h2>環境變數 <code>vars</code></h2>
+      <p>wrangler 設定裡的 <code>vars</code>，Worker 從 <code>env</code> 讀到。</p>
+      <div class="row"><button data-api="/api/vars">讀取</button></div>
+      <pre></pre>
+    </section>
+  </div>
+</main>
+<script>
+  // 「所有範例」連到網域首頁（showcase.rucloud.cc → rucloud.cc；showcase.localhost:8700 → portal.localhost:8700）
+  const parent = location.host.replace(/^showcase\./, '');
+  document.getElementById('home').href = `${location.protocol}//${/localhost/.test(parent) ? 'portal.' : ''}${parent}/`;
+
+  const show = (pre, status, body) => {
+    pre.className = status >= 400 ? 'err' : '';
+    pre.textContent = typeof body === 'string' ? body : JSON.stringify(body, null, 2);
+  };
+  async function call(path, init) {
+    const r = await fetch(path, init);
+    const text = await r.text();
+    try { return [r.status, JSON.parse(text)]; } catch { return [r.status, text]; }
+  }
+  async function run(btn, path, init) {
+    const pre = btn.closest('section').querySelector('pre');
+    btn.disabled = true;
+    try { show(pre, ...(await call(path, init))); } catch (e) { show(pre, 500, String(e)); }
+    btn.disabled = false;
+  }
+
+  document.querySelectorAll('button[data-api]').forEach((b) => { b.onclick = () => run(b, b.dataset.api); });
+
+  document.getElementById('do-btn').onclick = (e) => {
+    const name = document.getElementById('do-name').value.trim() || 'global';
+    run(e.currentTarget, `/api/do?name=${encodeURIComponent(name)}`);
+  };
+
+  document.getElementById('limit-btn').onclick = async (e) => {
+    const btn = e.currentTarget;
+    const pre = btn.closest('section').querySelector('pre');
+    btn.disabled = true;
+    const lines = [];
+    for (let i = 1; i <= 5; i++) {
+      const [status] = await call('/api/limit');
+      lines.push(`第 ${i} 次：${status === 200 ? '200 通過' : `${status} 被擋下`}`);
+      pre.className = ''; pre.textContent = lines.join('\n');
+    }
+    btn.disabled = false;
+  };
+
+  async function listFiles() {
+    const [, data] = await call('/api/r2');
+    const ul = document.getElementById('r2-files');
+    ul.innerHTML = '';
+    for (const o of (data.objects || []).slice(0, 50)) {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.href = `/api/r2?key=${encodeURIComponent(o.key)}`;
+      a.target = '_blank';
+      a.textContent = o.key;
+      li.append(a, ` (${o.size} B)`);
+      ul.append(li);
+    }
+    if (!ul.children.length) ul.innerHTML = '<li>（沒有檔案）</li>';
+  }
+  document.getElementById('r2-list').onclick = listFiles;
+  document.getElementById('r2-put').onclick = async (e) => {
+    const key = document.getElementById('r2-key').value.trim() || 'hello.txt';
+    await run(e.currentTarget, `/api/r2?key=${encodeURIComponent(key)}`, {
+      method: 'PUT', body: document.getElementById('r2-text').value, headers: { 'content-type': 'text/plain; charset=utf-8' },
+    });
+    listFiles();
+  };
+</script>
+</body>
+</html>
