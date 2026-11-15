@@ -4,6 +4,8 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src src
 COPY runtime runtime
+# rucloud init 的範本在編譯時嵌進執行檔
+COPY templates templates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked && cp target/release/rucloud /rucloud
