@@ -1,0 +1,7 @@
+// 陳鍾誠的個人介紹頁（只有靜態檔案）：https://ccc.rucloud.cc/
+// 部署：rucloud deploy sites/ccc --admin <管理 API>（沒有這個應用就自動新增）
+{
+  "name": "ccc",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public" }
+}

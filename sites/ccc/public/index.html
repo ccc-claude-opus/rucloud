@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>陳鍾誠 ccc</title>
+<meta name="description" content="陳鍾誠（ccc），國立金門大學資訊工程學系助理教授。程式設計、開放原始碼、網站設計。">
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+    --accent: #2f6fde; --accent-soft: #e8f0fd; --tag: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131416; --card: #1c1d20; --text: #ececee; --muted: #9a9aa2; --line: #2b2c31;
+      --accent: #6f9ff0; --accent-soft: #1b2638; --tag: #26272b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.7 system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  }
+  main { max-width: 920px; margin: 0 auto; padding: 56px 16px 72px; }
+  a { color: var(--accent); }
+  header { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; margin-bottom: 40px; }
+  .avatar {
+    width: 96px; height: 96px; border-radius: 50%; flex: none; background: var(--accent-soft); color: var(--accent);
+    display: grid; place-items: center; font-size: 40px; font-weight: 700; border: 1px solid var(--line); overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  h1 { margin: 0; font-size: clamp(28px, 5vw, 38px); letter-spacing: -0.01em; }
+  h1 small { font-size: 0.5em; color: var(--muted); font-weight: 500; margin-left: 8px; }
+  .role { margin: 4px 0 10px; color: var(--muted); }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .links a {
+    font-size: 14px; text-decoration: none; padding: 4px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  .links a:hover { border-color: var(--accent); color: var(--accent); }
+  h2 { font-size: 20px; margin: 44px 0 14px; display: flex; align-items: center; gap: 10px; }
+  h2::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+  .works { display: grid; gap: 16px; }
+  .work {
+    display: grid; grid-template-columns: 56px 1fr; gap: 16px; padding: 20px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    color: inherit; text-decoration: none; transition: border-color .15s, transform .15s;
+  }
+  .work:hover, .work:focus-visible { border-color: var(--accent); transform: translateY(-2px); outline: none; }
+  .work .icon { width: 56px; height: 56px; border-radius: 14px; background: var(--accent-soft); display: grid; place-items: center; font-size: 28px; }
+  .work h3 { margin: 0; font-size: 18px; }
+  .work .url { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .work p { margin: 8px 0 10px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tags span { background: var(--tag); color: var(--muted); font-size: 12px; padding: 2px 9px; border-radius: 999px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .box h3 { margin: 0 0 8px; font-size: 16px; }
+  .box ul { margin: 0; padding-left: 18px; }
+  .box li { margin: 2px 0; }
+  .when { color: var(--muted); font-size: 14px; }
+  details { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 20px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details ol { margin: 12px 0 0; padding-left: 22px; font-size: 14.5px; }
+  details li { margin: 6px 0; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
+  @media (max-width: 640px) {
+    .two { grid-template-columns: 1fr; }
+    .work { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="avatar"><img src="https://github.com/ccckmit.png?size=192" alt="" onerror="this.parentNode.textContent = '陳'"></div>
+    <div>
+      <h1>陳鍾誠 <small>ccc</small></h1>
+      <p class="role">國立金門大學 資訊工程學系 助理教授 · 程式設計、開放原始碼、網站設計（JavaScript / Python / C）</p>
+      <div class="links">
+        <a href="https://ccc.programmermedia.org/">個人網站</a>
+        <a href="https://github.com/ccckmit">GitHub</a>
+        <a href="https://medium.com/@ccckmit">Medium 網誌</a>
+        <a href="https://www.youtube.com/user/ccckmit">YouTube</a>
+        <a href="https://github.com/ccccourse">授課程式</a>
+        <a href="mailto:ccc@nqu.edu.tw">ccc@nqu.edu.tw</a>
+      </div>
+    </div>
+  </header>
+
+  <h2>作品</h2>
+  <div class="works">
+    <a class="work" href="https://ccc-eda.github.io/rueda/web/dist/index.html">
+      <div class="icon">🔌</div>
+      <div>
+        <h3>rueda IDE</h3>
+        <div class="url">ccc-eda.github.io/rueda</div>
+        <p>在瀏覽器裡從 Veryl 硬體描述語言一路做到晶片：寫程式、跑測試、合成成閘級電路、看電路圖，再到 FPGA（iCE40）與 ASIC（SKY130），還有虛擬板和 RISC-V 模擬機。全部用 WebAssembly 在瀏覽器執行，不需要伺服器。</p>
+        <div class="tags"><span>Veryl</span><span>EDA</span><span>FPGA / ASIC</span><span>RISC-V</span><span>WebAssembly</span></div>
+      </div>
+    </a>
+    <a class="work" href="https://cccbook.github.io/cccbook2026/">
+      <div class="icon">📚</div>
+      <div>
+        <h3>ccc 個人百科全書</h3>
+        <div class="url">cccbook.github.io/cccbook2026</div>
+        <p>用 AI 寫成的個人百科全書，涵蓋電腦（40 多本）、歷史（100 多本）、傳記（55 本）、數學、物品、小說與得獎（諾貝爾獎、圖靈獎、費爾茲獎）。由 OpenCode 搭配 GLM 產生，沒有人工校對。</p>
+        <div class="tags"><span>AI 寫作</span><span>電腦</span><span>歷史</span><span>數學</span><span>MkDocs</span></div>
+      </div>
+    </a>
+    <a class="work" href="https://mini-lang-web.ccckmit.workers.dev/">
+      <div class="icon">🌏</div>
+      <div>
+        <h3>mini-x 小字集語言學習網</h3>
+        <div class="url">mini-lang-web.ccckmit.workers.dev</div>
+        <p>用小字集學語言：中、英、法、日、韓五語平行的語料，有書架、搜尋、詞表、測驗與學習進度。</p>
+        <div class="tags"><span>語言學習</span><span>五語平行語料</span><span>Cloudflare Workers</span></div>
+      </div>
+    </a>
+  </div>
+
+  <h2>經歷</h2>
+  <div class="two">
+    <div class="box">
+      <h3>學歷</h3>
+      <ul>
+        <li>台灣大學 資訊工程所 博士 <span class="when">1997 – 2002</span></li>
+        <li>台灣大學 資訊工程所 碩士 <span class="when">1992 – 1994</span></li>
+        <li>交通大學 資訊科學系 學士 <span class="when">1988 – 1992</span></li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>工作</h3>
+      <ul>
+        <li>國立金門大學 資訊工程學系 助理教授</li>
+        <li>程式人雜誌 編輯 <span class="when">2013 – 2015</span></li>
+        <li>松下（PTL）網路實驗室 研發工程師 <span class="when">2002 – 2003</span></li>
+        <li>加旭科技 程式設計顧問 <span class="when">1998 – 2000</span></li>
+        <li>江川科技 程式設計師 <span class="when">1992 – 1993</span></li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>服務與榮譽</h3>
+      <ul>
+        <li>金門技術學院 優良教師 <span class="when">96 年</span></li>
+        <li>金門技術學院 資工系主任 <span class="when">93 年</span></li>
+      </ul>
+    </div>
+    <div class="box">
+      <h3>文章與教材</h3>
+      <ul>
+        <li><a href="https://medium.com/@ccckmit">Medium 網誌</a>、<a href="http://ccckmit.wikidot.com/">舊版網誌</a></li>
+        <li><a href="https://www.youtube.com/user/ccckmit">YouTube 影音教材</a></li>
+        <li>授課程式：<a href="https://github.com/ccccourse">GitHub</a>、<a href="https://gitlab.com/ccc109/">GitLab</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>論文</h2>
+  <details>
+    <summary>13 篇（1994 – 2009），點開看全部</summary>
+    <ol reversed>
+      <li>林伯陽、陳鍾誠，採用失敗後跳躍的策略以改良爬山演算法，第八屆離島資訊技術與應用研討會，2009。</li>
+      <li>Chyan Yang, Hsien-Jyh Liao, Chung-Chen Chen, Implementing digital copyright on the internet through an enhanced creative common licence protocol, <i>The Electronic Library</i>, 27(1), pp. 20–30, 2009.</li>
+      <li>廖先志、陳鍾誠，CCFE：一種內嵌於檔名中的創作共用授權表達法，2009（上篇的中文版）。</li>
+      <li>楊千、廖先志、陳鍾誠，論搜尋引擎以程式在網路上自動抓取資料所可能面臨的法律問題，第十屆全國科技法律研討會，2006。</li>
+      <li>楊千、廖先志、陳鍾誠，從我國法制論 GPL 授權契約 — 兼論第 3 版草案之適用，台灣科技法與政策論叢，第三卷第三期，2006。</li>
+      <li>陳鍾誠、廖先志，開放原始碼運動的過去、現在與未來，國立金門技術學院學報，第二期，2006。</li>
+      <li>陳鍾誠、高成炎，一種抽取並組織網路上基因相關資料的方法，2003。</li>
+      <li>Yuh-Pyng Shieh, Chung-Chen Chen, Jieh Hsiang, A Reasoning Framework for Heterogeneous XML, ITRE 2003.</li>
+      <li>陳鍾誠，基於欄位填充機制的 XML 文件檢索方法，國立台灣大學資訊工程所博士論文，指導教授：項潔，2002。</li>
+      <li>陳鍾誠、許聞廉，A Document Similarity Measurement without Dictionaries, IRAL 99, 1999.</li>
+      <li>陳鍾誠、許聞廉，結合統計與規則的多層次中文斷詞系統，ROCLING XI, 1998。</li>
+      <li>洪炯宗、陳鍾誠、高成炎，A Genetic Approach to Decrypt Cipher Text，第五屆全國資訊安全會議，1995。</li>
+      <li>陳鍾誠，應用退火遺傳演算法解積體電路平面設計問題及其他應用，國立台灣大學資訊工程所碩士論文，1994。</li>
+    </ol>
+  </details>
+
+  <footer>
+    資料來源：<a href="https://csie.nqu.edu.tw/p/404-1038-2377.php?Lang=zh-tw">金門大學資工系個人資料頁</a>。本站跑在自架的 <a href="https://rucloud.cc/">rucloud</a> 上。
+  </footer>
+</main>
+</body>
+</html>
