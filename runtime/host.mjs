@@ -358,6 +358,9 @@ function wsTransport(socket, head, client) {
   });
   socket.on('error', (e) => { if (!done) server._dispatch('error', { error: e, message: e.message }); });
   socket.on('close', () => finish(1006, '', false));
+  // 對方沒送 close 訊框就斷了（程序結束、網路斷掉）：只會收到 FIN。HTTP 伺服器的連線允許半關閉，
+  // 不會自己觸發 close，所以要在這裡結束，否則 Durable Object 永遠不知道這個人離開了
+  socket.on('end', () => { finish(1006, '', false); socket.destroy(); });
 }
 
 // 本機 Worker 回了 101 + webSocket：完成 handshake，接上訊框處理
@@ -384,8 +387,9 @@ function spliceTunnel(socket, head, tunnel) {
   tunnel.socket.setNoDelay(true);
   socket.pipe(tunnel.socket).pipe(socket);
   const kill = () => { socket.destroy(); tunnel.socket.destroy(); };
-  socket.on('error', kill).on('close', kill);
-  tunnel.socket.on('error', kill).on('close', kill);
+  // end：其中一邊只送了 FIN（沒有 close 訊框就斷線），另一邊也要跟著關，斷線才傳得到 Durable Object
+  socket.on('error', kill).on('close', kill).on('end', kill);
+  tunnel.socket.on('error', kill).on('close', kill).on('end', kill);
 }
 
 const isUpgrade = (req) => (req.headers.get('upgrade') || '').toLowerCase() === 'websocket';

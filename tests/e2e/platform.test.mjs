@@ -223,6 +223,25 @@ test('WebSocket：Durable Object 聊天室（跨程序廣播、紀錄存在 SQLi
   assert.equal((await fetch(`http://127.0.0.1:${P.chat}/ws`)).status, 426);
 });
 
+test('WebSocket：對方沒送 close 就斷線（程序結束），Durable Object 也會收到 webSocketClose', async () => {
+  const room = `gone${Date.now()}`;
+  const w = await wsOpen(`ws://127.0.0.1:${P.chat}/ws?room=${room}&name=watcher`);
+  // 另一個程序連進來，然後直接結束（只有 TCP FIN，沒有 close 訊框）
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', `
+    const ws = new WebSocket('ws://127.0.0.1:${P.chat}/ws?room=${room}&name=ghost');
+    ws.onopen = () => setTimeout(() => process.exit(0), 200);`], { stdio: 'ignore' });
+  await new Promise((r) => child.on('exit', r));
+  let leave;
+  for (let i = 0; i < 30 && !leave; i++) {
+    await sleep(100);
+    leave = w.msgs.map((m) => JSON.parse(m)).find((m) => m.type === 'leave' && m.name === 'ghost');
+  }
+  assert.ok(leave, `沒有收到 ghost 離開：${w.msgs.join(' ')}`);
+  assert.equal(leave.online, 1);
+  w.ws.close();
+});
+
 // ---------- S3 ----------
 
 function sign(method, path, { query = {}, body = '', headers = {}, secret = 'secret' } = {}) {

@@ -1,5 +1,12 @@
 # 更新紀錄
 
+## 1.7.1 — 修正
+
+* 修正：WebSocket 的對方沒送 close 訊框就斷線（程序結束、網路斷掉、手機休眠）時，Durable Object 收不到 `webSocketClose`，聊天室之類的應用會一直以為那個人還在線上。現在只收到 TCP FIN 也會當作斷線（code 1006），跨程序的轉接也會跟著關閉。
+* examples/chat：重新設計介面（訊息泡泡、頭像、時間、線上人數、房間放在網址的 `#`、斷線自動重連）；訊息附上時間。
+* examples/showcase：互動的首頁；上傳的檔案最大 32 KB、最多保留 30 個。
+* examples/portal：列出所有範例應用的首頁（https://rucloud.cc/）。
+
 ## 1.7.0 — 新主機幾分鐘架好
 
 * **萬用字元憑證**（DNS-01）：`[tls.acme] dns = { provider = "cloudflare" | "linode" }`，一張 `*.example.com` 加 `example.com` 涵蓋所有子網域（`wildcard` 不寫就用 `[domain]` 的 base），被涵蓋的網域不再個別申請。API token 可以放環境變數 `CLOUDFLARE_API_TOKEN` / `LINODE_TOKEN`。用完的 TXT 記錄會刪掉。

@@ -16,7 +16,7 @@ export class ChatRoom extends DurableObject {
     this.ctx.acceptWebSocket(server, [name]);
     server.serializeAttachment({ name });
     // 新加入的人先收到最近 20 則紀錄
-    const recent = this.ctx.storage.sql.exec('SELECT id, name, text FROM messages ORDER BY id DESC LIMIT 20').toArray().reverse();
+    const recent = this.ctx.storage.sql.exec('SELECT id, name, text, at FROM messages ORDER BY id DESC LIMIT 20').toArray().reverse();
     server.send(JSON.stringify({ type: 'history', messages: recent }));
     this.broadcast({ type: 'join', name, online: this.ctx.getWebSockets().length });
     return new Response(null, { status: 101, webSocket: client });
@@ -24,10 +24,10 @@ export class ChatRoom extends DurableObject {
 
   async webSocketMessage(ws, message) {
     const { name } = ws.deserializeAttachment();
-    const { id } = this.ctx.storage.sql
-      .exec('INSERT INTO messages (name, text) VALUES (?, ?) RETURNING id', name, String(message).slice(0, 2000))
+    const { id, at } = this.ctx.storage.sql
+      .exec('INSERT INTO messages (name, text) VALUES (?, ?) RETURNING id, at', name, String(message).slice(0, 2000))
       .one();
-    this.broadcast({ type: 'message', name, text: String(message), n: id });
+    this.broadcast({ type: 'message', name, text: String(message), n: id, at });
   }
 
   async webSocketClose(ws, code) {
