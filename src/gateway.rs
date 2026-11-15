@@ -29,13 +29,23 @@ pub async fn app_handler(
     handle(&slot.get(), req, peer).await
 }
 
+/// 標記：這個請求是從 rucloud 自己的 HTTPS 入口進來的
+#[derive(Clone, Copy)]
+pub struct ViaTls;
+
 /// 共用入口：依 Host 找應用
 pub async fn edge_handler(
     State(registry): State<Arc<crate::registry::Registry>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     req: Request,
 ) -> Response<Body> {
-    let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).unwrap_or("");
+    // HTTP/2 沒有 Host 標頭，主機名稱在 :authority（uri 裡）
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| req.uri().authority().map(|a| a.as_str()))
+        .unwrap_or("");
     let host = host
         .rsplit_once(':')
         .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
@@ -111,27 +121,43 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
     if app.pool.is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let scheme = req
-        .headers()
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("http")
-        .to_string();
+    // 只有 trusted_proxies 連進來的才採信 X-Forwarded-For / X-Forwarded-Proto
+    let (client, fwd_proto) = crate::proxy::get().resolve(peer.ip(), req.headers());
+    let scheme = if req.extensions().get::<ViaTls>().is_some() {
+        "https".to_string()
+    } else {
+        fwd_proto.unwrap_or_else(|| "http".into())
+    };
     let host = req
         .headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
+        .or_else(|| req.uri().authority().map(|a| a.as_str()))
         .unwrap_or("localhost")
         .to_string();
     let url = format!("{scheme}://{host}{}", req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
     let mut extra = vec![
         ("x-rucloud-url", url),
-        ("cf-connecting-ip", peer.ip().to_string()),
-        ("x-real-ip", peer.ip().to_string()),
+        ("cf-connecting-ip", client.to_string()),
+        ("x-real-ip", client.to_string()),
+        ("x-forwarded-proto", scheme.clone()),
     ];
-    if !req.headers().contains_key("x-forwarded-for") {
-        extra.push(("x-forwarded-for", peer.ip().to_string()));
-    }
+    // 不信任的來源自己帶的 X-Forwarded-For 不轉給 Worker
+    let forwarded = req
+        .headers()
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join(", ");
+    extra.push((
+        "x-forwarded-for",
+        if client != peer.ip() && !forwarded.is_empty() {
+            format!("{forwarded}, {}", peer.ip())
+        } else {
+            client.to_string()
+        },
+    ));
     // 閘道快取（應用設定 cache_mb 才開）：GET、沒有 Authorization、不是 WebSocket
     let cache_key = app.cache.edge.as_ref().filter(|_| {
         req.method() == axum::http::Method::GET

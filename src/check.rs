@@ -129,6 +129,19 @@ fn check_ports(cfg: &ServeConfig, r: &mut Report) {
                 r.err(&format!("找不到 {}", p.display()));
             }
         }
+        if let Some(a) = &t.acme
+            && a.domains.is_empty()
+            && cfg.domain.is_none()
+            && cfg.apps.iter().all(|e| e.hosts.is_empty())
+        {
+            r.warn("[tls.acme]：沒有設定 [domain]、應用的 hosts 或 domains，只有 wrangler 的 routes 與執行中新增的應用會申請憑證");
+        }
+        if let Some(d) = &cfg.domain
+            && !crate::acme::issuable(&d.base)
+            && t.acme.is_some()
+        {
+            r.warn(&format!("[domain] base = {} 不是公開的網域，CA 不會發憑證", d.base));
+        }
         if t.redirect_http && cfg.edge.is_none() {
             r.warn("[tls] redirect_http 需要 [edge] 的 HTTP 埠");
         }
@@ -212,6 +225,10 @@ fn check_app(entry: &AppEntry, r: &mut Report) -> Option<Vec<String>> {
     };
     for (key, why) in config::unsupported_keys(&dir, entry.env.as_deref()) {
         r.warn(&format!("wrangler 設定的 {key}：{why}"));
+    }
+    let routes = w.route_hosts();
+    if !routes.is_empty() {
+        r.ok(&format!("網域（wrangler 的 routes）：{}", routes.join("、")));
     }
     match &w.main {
         Some(m) if !dir.join(m).is_file() => r.err(&format!("找不到 main {m}")),

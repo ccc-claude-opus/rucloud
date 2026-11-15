@@ -19,6 +19,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # 自動憑證的測試用 Let's Encrypt 官方的測試伺服器 Pebble
+      - name: Pebble
+        run: |
+          mkdir -p /tmp/pebble && cd /tmp/pebble
+          for f in pebble pebble-challtestsrv; do
+            curl -sSfL "https://github.com/letsencrypt/pebble/releases/download/v2.10.3/$f-linux-amd64.tar.gz" | tar -xz
+          done
+          find . -type f -name 'pebble*' -perm -u+x -exec mv {} . \;
+          echo "PEBBLE_BIN=/tmp/pebble" >> "$GITHUB_ENV"
       # 單元測試 + tests/e2e（Node 的 test runner 跑整合測試）
       - run: cargo test
       - run: cargo publish --dry-run

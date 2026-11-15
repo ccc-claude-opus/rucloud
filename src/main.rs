@@ -2,6 +2,7 @@
 //! Rust 負責邊緣閘道、靜態檔案、所有資料綁定（D1/KV/R2/Queues/DO/Vectorize）與排程；
 //! Worker 的 JS 程式碼跑在 Node.js 程序裡。
 
+mod acme;
 mod admin;
 mod ai;
 mod ai_gateway;
@@ -21,6 +22,7 @@ mod init;
 mod kv;
 mod observe;
 mod pool;
+mod proxy;
 mod queues;
 mod r2;
 mod registry;
@@ -345,6 +347,8 @@ async fn main() -> Result<()> {
                 compression: true,
                 replicate: None,
                 dynamic: None,
+                trusted_proxies: crate::proxy::default_list(),
+                domain: None,
                 tls: match (tls_cert, tls_key) {
                     (Some(cert), Some(key)) => Some(tls::TlsCfg {
                         port: tls_port,

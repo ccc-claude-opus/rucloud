@@ -3,7 +3,7 @@
 移植自 AI Studio 的 `boardgame-arena`（原本是 Express + `ws` 的 Node 伺服器，狀態全放記憶體），
 改成 rucloud / Cloudflare Workers 架構：
 
-- **前端**：React + Tailwind（Vite build），象棋、五子棋、西洋棋、跳棋、大富翁，
+- **前端**：React + Tailwind（Vite build），象棋、五子棋、圍棋、西洋棋、跳棋、大富翁，
   遊戲邏輯全在瀏覽器端（AI 對手也是前端自己算）。
 - **後端**：`src/worker.js` 一支 Worker + 一個 SQLite 型 Durable Object（`Arena`），
   WebSocket 用 hibernation API。原本 in-memory 的房間、聊天室、ELO 排行改成存

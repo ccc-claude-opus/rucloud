@@ -33,9 +33,17 @@ state_dir = "/var/lib/rucloud"   # 相對路徑以設定檔所在資料夾為準
 node = "node"                    # Node 執行檔
 bind = "0.0.0.0"
 
-# 共用入口：依 Host 標頭分派。應用名稱、hosts 都可以對應
+# 共用入口：依 Host 標頭分派。應用名稱、hosts、wrangler 的 routes 都可以對應
 [edge]
 port = 80
+
+# 自己的網域（可省略）：每個應用自動有 <名稱>.example.com；DNS 把 example.com 與 *.example.com 指到這台
+[domain]
+base = "example.com"
+root = "www"                     # example.com 本身給哪個應用（可省略）
+
+# 信任的反向代理（預設只有本機）：只有從這些位址來的請求才採用 X-Forwarded-For / Proto
+# trusted_proxies = ["127.0.0.1", "10.0.0.0/8", "cloudflare"]
 
 # AI Gateway（可省略）
 [ai_gateway]
@@ -54,10 +62,12 @@ token = "換成很長的亂數"           # 可省略；設定後 /apps/* 需要
 
 shutdown_timeout = 30            # 收到 SIGTERM 後最多等幾秒讓請求做完
 
-# HTTPS（可省略）：和 edge 一樣依 Host 分派，應用要設定 hosts
+# HTTPS（可省略）：和 edge 一樣依 Host 分派
 [tls]
 port = 443
-acme = { domains = ["shop.example.com"], email = ["me@example.com"] }   # Let's Encrypt 自動申請、續期
+# Let's Encrypt：每個應用的網域（[domain]、hosts、routes）自動申請、到期前 30 天續期；
+# on_demand：第一次有人連到還沒有憑證的網域才申請（只限屬於某個應用的網域，例如執行中新增的應用）
+acme = { email = ["me@example.com"] }
 # cert = "/etc/rucloud/cert.pem"   # 或自備憑證（和 acme 二選一）
 # key = "/etc/rucloud/key.pem"
 redirect_http = true             # edge 的 HTTP 埠全部轉址到 HTTPS
@@ -90,7 +100,9 @@ do_idle_ms = 60000               # Durable Object 閒置多久就從記憶體移
 cache_mb = 64                    # 閘道依 Cache-Control 快取 Worker 回應（不設 = 不快取）
 ```
 
-HTTPS 可以由 rucloud 自己處理（`[tls]`，ACME 需要 443 埠對外），也可以交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）；用反向代理時 rucloud 會把 `x-forwarded-proto` 反映到 `request.url` 的協定。
+HTTPS 可以由 rucloud 自己處理（`[tls]`，ACME 用 TLS-ALPN-01 驗證，需要 443 埠對外，不需要 DNS API），也可以交給前面的反向代理（Caddy、nginx、Cloudflare Tunnel）。用反向代理時，把它的位址放進 `trusted_proxies`（同一台機器上的不用，預設就信任本機）：rucloud 會採用它給的 `X-Forwarded-Proto`（`request.url` 的協定）與 `X-Forwarded-For`（Worker 看到的 `cf-connecting-ip`、Rate Limiting 用的 IP）。前面是 Cloudflare 的代理（橘色雲朵）時寫 `"cloudflare"`，會改用 `CF-Connecting-IP`。
+
+Let's Encrypt 對同一個主網域每週發的憑證數量有上限；執行中新增的應用很多時，請改用萬用字元憑證（見 1.7）。
 
 ### 監控
 

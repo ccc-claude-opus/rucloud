@@ -1,4 +1,4 @@
-export type GameType = 'xiangqi' | 'gomoku' | 'chess' | 'checkers' | 'monopoly';
+export type GameType = 'xiangqi' | 'gomoku' | 'chess' | 'checkers' | 'monopoly' | 'go';
 export type GameMode = 'ai' | 'pvp';
 export type RoomStatus = 'waiting' | 'playing' | 'finished';
 
@@ -80,5 +80,11 @@ export const GAME_META: Record<
     subtitle: '地產投資，擲骰致富',
     playersLabel: '雙人對戰',
     accent: '#8b5cf6',
+  },
+  go: {
+    name: '圍棋',
+    subtitle: '十九路縱橫，黑白爭地',
+    playersLabel: '雙人對弈',
+    accent: '#64748b',
   },
 };

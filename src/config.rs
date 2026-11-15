@@ -31,6 +31,35 @@ pub struct Wrangler {
     pub workflows: Vec<WorkflowCfg>,
     pub hyperdrive: Vec<HyperdriveCfg>,
     pub analytics_engine_datasets: Vec<AnalyticsCfg>,
+    /// Cloudflare 的 routes / route：rucloud 取出其中的主機名稱當作這個應用的網域
+    pub routes: Vec<RouteCfg>,
+    pub route: Option<RouteCfg>,
+}
+
+/// "shop.example.com/*" 或 { pattern: "shop.example.com", custom_domain: true }
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum RouteCfg {
+    Pattern(String),
+    Object { pattern: String },
+}
+
+impl Wrangler {
+    /// routes 裡的主機名稱（有萬用字元的略過）
+    pub fn route_hosts(&self) -> Vec<String> {
+        self.routes
+            .iter()
+            .chain(self.route.iter())
+            .filter_map(|r| {
+                let p = match r {
+                    RouteCfg::Pattern(p) | RouteCfg::Object { pattern: p } => p,
+                };
+                let p = p.split_once("://").map(|(_, r)| r).unwrap_or(p);
+                let host = p.split('/').next().unwrap_or("").to_ascii_lowercase();
+                (!host.is_empty() && !host.contains('*')).then_some(host)
+            })
+            .collect()
+    }
 }
 
 /// Hyperdrive：rucloud 不做連線池，直接把資料庫的連線字串交給 Worker
@@ -220,8 +249,6 @@ pub fn load_wrangler(dir: &Path, env: Option<&str>) -> Result<Wrangler> {
 
 /// rucloud 讀得到但不支援（會被忽略）的 wrangler 欄位，和原因
 pub const UNSUPPORTED: &[(&str, &str)] = &[
-    ("routes", "rucloud 依 rucloud.toml 的 hosts / port 分派，不讀 routes"),
-    ("route", "rucloud 依 rucloud.toml 的 hosts / port 分派，不讀 route"),
     ("compatibility_flags", "會被忽略；Node.js 相容（nodejs_compat）一律開著"),
     (
         "tail_consumers",
@@ -354,6 +381,12 @@ pub struct ServeConfig {
     pub replicate: Option<crate::replicate::ReplicateCfg>,
     /// 允許透過管理 API 在執行中新增應用（每個應用自己的 Worker 程序與資料）
     pub dynamic: Option<DynamicCfg>,
+    /// 自己的網域：每個應用自動有 <名稱>.<base>
+    pub domain: Option<DomainCfg>,
+    /// 信任的反向代理（IP、CIDR，或 "cloudflare"）：只有從這些位址來的請求才採用
+    /// X-Forwarded-For / X-Forwarded-Proto / CF-Connecting-IP。預設只信任本機
+    #[serde(default = "crate::proxy::default_list")]
+    pub trusted_proxies: Vec<String>,
     /// 回應壓縮（gzip、brotli）
     #[serde(default = "yes")]
     pub compression: bool,
@@ -439,6 +472,15 @@ pub struct AppEntry {
 fn default_state() -> PathBuf {
     PathBuf::from(".rucloud")
 }
+/// `[domain]`：每個應用自動對應 <應用名稱>.<base>（DNS 請把 base 與 *.base 指到這台機器）
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DomainCfg {
+    pub base: String,
+    /// base 本身（example.com）給哪個應用
+    pub root: Option<String>,
+}
+
 /// `[dynamic]`：執行中新增的應用。用在「替使用者執行程式碼」的服務（例如 examples/app-builder），
 /// 每個應用是自己的 Worker 程序、自己的沙箱與資料，只能用不會碰到其他應用的綁定。
 #[derive(Debug, Deserialize, Clone)]

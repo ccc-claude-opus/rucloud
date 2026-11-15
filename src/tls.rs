@@ -1,10 +1,9 @@
 //! HTTPS 入口：和 edge 一樣依 Host 分派到各應用。
-//! 憑證二選一：自備的 PEM 檔，或 ACME（Let's Encrypt，TLS-ALPN-01 驗證，自動續期）。
+//! 憑證二選一：自備的 PEM 檔，或 ACME（見 acme.rs：每個網域一張、on-demand、自動續期）。
 
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::extract::ConnectInfo;
-use futures_util::StreamExt;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
@@ -24,38 +23,28 @@ pub struct TlsCfg {
     pub cert: Option<PathBuf>,
     pub key: Option<PathBuf>,
     /// 自動申請憑證
-    pub acme: Option<AcmeCfg>,
+    pub acme: Option<crate::acme::AcmeCfg>,
     /// edge 的 HTTP 埠改成全部轉址到 HTTPS
     #[serde(default)]
     pub redirect_http: bool,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct AcmeCfg {
-    pub domains: Vec<String>,
-    #[serde(default)]
-    pub email: Vec<String>,
-    /// false 時用 Let's Encrypt 的 staging（測試用，憑證不被瀏覽器信任）
-    #[serde(default = "yes")]
-    pub production: bool,
-    /// 憑證快取，預設 <state>/acme
-    pub cache_dir: Option<PathBuf>,
-}
-
 fn https_port() -> u16 {
     443
 }
-fn yes() -> bool {
-    true
-}
-
 enum Certs {
     Static(Arc<ServerConfig>),
     Acme {
+        acme: Arc<crate::acme::Acme>,
         normal: Arc<ServerConfig>,
-        challenge: Arc<ServerConfig>,
     },
+}
+
+fn resolver_config(resolver: Arc<dyn rustls::server::ResolvesServerCert>) -> Result<ServerConfig> {
+    Ok(ServerConfig::builder_with_provider(provider())
+        .with_safe_default_protocol_versions()?
+        .with_no_client_auth()
+        .with_cert_resolver(resolver))
 }
 
 fn provider() -> Arc<rustls::crypto::CryptoProvider> {
@@ -96,34 +85,18 @@ pub async fn serve(
     state_root: &Path,
     router: Router,
     shutdown: CancellationToken,
+    registry: Arc<crate::registry::Registry>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     let certs = match (&cfg.cert, &cfg.key, &cfg.acme) {
         (Some(c), Some(k), None) => Certs::Static(load_static(c, k)?),
-        (None, None, Some(acme)) => {
-            let mut state = rustls_acme::AcmeConfig::new(acme.domains.clone())
-                .contact(acme.email.iter().map(|e| format!("mailto:{e}")))
-                .cache(rustls_acme::caches::DirCache::new(
-                    acme.cache_dir.clone().unwrap_or_else(|| state_root.join("acme")),
-                ))
-                .directory_lets_encrypt(acme.production)
-                .state();
-            let normal = with_alpn(
-                ServerConfig::builder_with_provider(provider())
-                    .with_safe_default_protocol_versions()?
-                    .with_no_client_auth()
-                    .with_cert_resolver(state.resolver()),
-            );
-            let challenge = state.challenge_rustls_config();
-            // 推動申請與續期
-            tokio::spawn(async move {
-                while let Some(ev) = state.next().await {
-                    match ev {
-                        Ok(ok) => tracing::info!("ACME：{ok:?}"),
-                        Err(e) => tracing::error!("ACME 錯誤：{e:?}"),
-                    }
-                }
-            });
-            Certs::Acme { normal, challenge }
+        (None, None, Some(acme_cfg)) => {
+            let reg = registry.clone();
+            let acme = crate::acme::Acme::new(acme_cfg.clone(), state_root, Box::new(move |h| reg.owns_host(h)))?;
+            let normal = with_alpn(resolver_config(Arc::new(crate::acme::Resolver(acme.clone())))?);
+            // 先替所有應用的網域申請，之後定期續期
+            let reg = registry.clone();
+            tokio::spawn(acme.clone().run(move || reg.all_hosts()));
+            Certs::Acme { acme, normal }
         }
         _ => bail!("[tls] 要設定 cert + key，或 acme（二選一）"),
     };
@@ -133,12 +106,8 @@ pub async fn serve(
         .await
         .with_context(|| format!("無法監聽 {addr}"))?;
     tracing::info!("HTTPS：https://<網域>:{}（依 Host 分派）", cfg.port);
-    // 讓應用知道是 https（request.url 的協定）
-    let router = router.layer(axum::middleware::map_request(|mut req: axum::extract::Request| async move {
-        req.headers_mut()
-            .insert("x-forwarded-proto", axum::http::HeaderValue::from_static("https"));
-        req
-    }));
+    // 讓應用知道是 https（request.url 的協定）；用內部標記，不用別人也能偽造的標頭
+    let router = router.layer(axum::Extension(crate::gateway::ViaTls));
     Ok(tokio::spawn(async move {
         let graceful = hyper_util::server::graceful::GracefulShutdown::new();
         loop {
@@ -158,11 +127,29 @@ pub async fn serve(
                 };
                 let config = match certs.as_ref() {
                     Certs::Static(c) => c.clone(),
-                    Certs::Acme { normal, challenge } => {
-                        if rustls_acme::is_tls_alpn_challenge(&start.client_hello()) {
-                            // Let's Encrypt 的驗證連線：完成交握就結束
-                            let _ = start.into_stream(challenge.clone()).await;
+                    Certs::Acme { acme, normal } => {
+                        let hello = start.client_hello();
+                        let host = hello.server_name().map(|h| h.to_ascii_lowercase());
+                        let is_challenge = hello.alpn().is_some_and(|mut a| a.any(|p| p == b"acme-tls/1"));
+                        if is_challenge {
+                            // CA 的 TLS-ALPN-01 驗證連線：給驗證用的憑證，完成交握就結束
+                            let Some(ck) = host.as_deref().and_then(|h| acme.challenge(h)) else {
+                                return;
+                            };
+                            let Ok(mut c) = resolver_config(Arc::new(crate::acme::Single(ck))) else {
+                                return;
+                            };
+                            c.alpn_protocols = vec![b"acme-tls/1".to_vec()];
+                            let _ = start.into_stream(Arc::new(c)).await;
                             return;
+                        }
+                        // on-demand：還沒有憑證、但確實屬於某個應用的網域，等申請完成再交握
+                        if let Some(h) = &host
+                            && acme.on_demand()
+                            && !acme.has(h)
+                            && acme.allowed(h)
+                        {
+                            let _ = tokio::time::timeout(std::time::Duration::from_secs(90), acme.ensure(h)).await;
                         }
                         normal.clone()
                     }

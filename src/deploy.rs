@@ -164,10 +164,18 @@ impl Deployer {
         };
         let (ctx, s2, code2) = (self.ctx.clone(), slot.clone(), code.clone());
         let new = tokio::task::spawn_blocking(move || App::load(&s2.entry, &ctx, &code2, &s2.name, &s2.shared)).await??;
+        let hosts = self.registry.hosts_for_cfg(&slot, &new.cfg, self.registry.is_dynamic(app));
+        if let Err(e) = self.registry.check_hosts(app, &hosts) {
+            if let Some(p) = &new.pool {
+                p.stop();
+            }
+            return Err(e.context("維持原本的版本"));
+        }
         if let Some(pool) = &new.pool {
             wait_ready(pool, &slot).await.context("維持原本的版本")?;
         }
         let old = slot.set(new.clone());
+        self.registry.refresh_hosts(&slot)?;
         slot.shared.cache.clear_edge();
         restart_background(&slot, &new, &self.queues);
         let mut m = manifest(&self.ctx, app);
@@ -375,7 +383,7 @@ impl Deployer {
         let mut m = manifest(&self.ctx, name);
         m.current = Some(v.id.clone());
         save_manifest(&self.ctx, name, &m)?;
-        self.registry.insert(slot.clone(), &[], true);
+        self.registry.insert(slot.clone(), true)?;
         restart_background(&slot, &app, &self.queues);
         let mut list = dynamic_list(&self.ctx);
         list.retain(|x| x != name);
@@ -431,7 +439,9 @@ impl Deployer {
             match tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await {
                 Ok(Ok(slot)) => {
                     restart_background(&slot, &slot.get(), &self.queues);
-                    self.registry.insert(slot, &[], true);
+                    if let Err(e) = self.registry.insert(slot, true) {
+                        tracing::error!("[{name}] 無法載入：{e:#}");
+                    }
                 }
                 Ok(Err(e)) => tracing::error!("[{name}] 無法載入：{e:#}"),
                 Err(e) => tracing::error!("[{name}] 無法載入：{e}"),

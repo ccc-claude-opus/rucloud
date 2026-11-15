@@ -176,6 +176,7 @@ async fn apps(State(admin): S) -> axum::Json<serde_json::Value> {
                 json!({
                     "name": n,
                     "dynamic": admin.apps.is_dynamic(n),
+                    "hosts": admin.apps.hosts_of(n),
                     "dir": a.dir,
                     "instances": a.pool.as_ref().map(|p| p.len()),
                     "version": crate::deploy::manifest(&admin.deployer.ctx, n).current,
@@ -415,6 +416,7 @@ async fn stats(State(admin): S) -> Response {
             m["name"] = json!(name);
             m["dir"] = json!(a.dir);
             m["version"] = json!(crate::deploy::manifest(&admin.deployer.ctx, name).current);
+            m["hosts"] = json!(admin.apps.hosts_of(name));
             m["workers"] = json!(
                 a.pool
                     .as_ref()

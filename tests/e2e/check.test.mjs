@@ -39,7 +39,7 @@ test('rucloud check：打錯字、重複的埠、找不到的檔案、不支援�
   assert.match(r.out, /埠 9100 重複/);
   assert.match(r.out, /找不到 env_file/);
   assert.match(r.out, /沒有設定 token/);
-  assert.match(r.out, /wrangler 設定的 routes/);
+  assert.match(r.out, /網域（wrangler 的 routes）：x\.com/);
   assert.match(r.out, /compatibility_flags/);
 
   r = run('check', app);

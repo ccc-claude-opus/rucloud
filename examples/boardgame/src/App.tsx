@@ -9,6 +9,7 @@ import {
   RoomSummary,
 } from './types/game';
 import { GomokuGame } from './components/games/GomokuGame';
+import { GoGame } from './components/games/GoGame';
 import { XiangqiGame } from './components/games/XiangqiGame';
 import { ChessGame } from './components/games/ChessGame';
 import { CheckersGame } from './components/games/CheckersGame';
@@ -148,6 +149,8 @@ export function App() {
         return <XiangqiGame {...props} />;
       case 'gomoku':
         return <GomokuGame {...props} />;
+      case 'go':
+        return <GoGame {...props} />;
       case 'chess':
         return <ChessGame {...props} />;
       case 'checkers':

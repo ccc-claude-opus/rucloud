@@ -1,5 +1,19 @@
 # 更新紀錄
 
+## 1.5.0 — 自己的網域與自動憑證
+
+* **`[domain] base = "example.com"`**：每個應用自動有 `<名稱>.example.com`（執行中新增的應用也是）；`root` 指定 `example.com` 本身給哪個應用。DNS 只要把 `example.com` 與 `*.example.com` 指到這台機器一次。
+* **讀取 wrangler 的 `routes` / `route`**（`custom_domain` 或 `pattern` 的主機名稱），Cloudflare 專案的網域設定直接生效。兩個應用搶同一個網域會拒絕啟動 / 拒絕換版。執行中新增的應用不採用 routes。
+* **自動憑證重寫**（不再用 rustls-acme）：
+  * 每個網域一張憑證，網域自動來自應用（`hosts`、`routes`、`[domain]`），`[tls.acme] domains` 變成選填
+  * on-demand：第一次有人連到還沒有憑證的網域時才申請，只發給屬於某個應用的網域
+  * 到期前 30 天續期；失敗後 10 分鐘內不重試同一個網域
+  * `directory`、`ca_root`：可以接其他 ACME 伺服器（例如測試用的 Pebble）
+* **`trusted_proxies`**（預設本機）：只有從這些位址（IP、CIDR 或 `"cloudflare"`）來的請求，才採用 `X-Forwarded-For` / `X-Forwarded-Proto` / `CF-Connecting-IP`；Worker 看到的 `cf-connecting-ip` 是真實的使用者 IP（Rate Limiting 也因此正確）。其他人自己帶的這些標頭一律不信。
+* 修正：rucloud 自己的 HTTPS 用 HTTP/2 時，edge 找不到應用（HTTP/2 沒有 `Host` 標頭）。
+* 管理 API 的 `/apps`、`/stats` 列出每個應用的網域。
+* 整合測試：`domain.test.mjs`；`acme.test.mjs` 用 Pebble 跑完整 ACME 流程（設 `PEBBLE_BIN`，CI 會自動下載）。
+
 ## 1.4.0 — 執行中新增應用
 
 * **`[dynamic]`**：透過管理 API 在執行中新增、更新、刪除應用，不必改 `rucloud.toml`、不必重新啟動。給「替使用者執行程式碼」的服務用（例如 [examples/app-builder](examples/app-builder)），每個應用：

@@ -53,6 +53,14 @@
 | 1.3.0 ✓ | 持續複寫 | SQLite 的變更持續送到 S3 / R2（類似 Litestream），機器壞了可以在另一台還原到幾秒前 | |
 | 1.4.0 ✓ | workerd 評估、執行中新增應用 | workerd 已評估，結論見 [workerd.md](workerd.md)：沒有 CPU 限制、也不是 hardened sandbox，暫不做成執行環境。另外加入 `[dynamic]`：透過管理 API 在執行中新增應用，每個應用自己的程序、沙箱、資料與網域 |
 
+## 自架成像 Cloudflare 一樣（1.5～1.7）
+
+| 版本 | 主題 | 內容 |
+|---|---|---|
+| 1.5.0 ✓ | 自己的網域與自動憑證 | `[domain]` 自動子網域、wrangler `routes`、每個網域一張憑證與 on-demand、`trusted_proxies` |
+| 1.6.0 | 像 `wrangler deploy` 一樣部署 | 部署時自動新增應用、`rucloud secret`、管理 API 透過 HTTPS 對外 |
+| 1.7.0 | 新主機幾分鐘架好 | 萬用字元憑證（DNS-01：Cloudflare、Linode）、預編執行檔、安裝腳本與 systemd |
+
 ## 之後再考慮
 
 * **多台機器**：多台共用狀態、Durable Object 的跨機器路由。

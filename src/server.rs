@@ -52,6 +52,7 @@ fn check_state_format(state_root: &Path) -> Result<()> {
 }
 
 pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
+    crate::proxy::init(&cfg.trusted_proxies)?;
     std::fs::create_dir_all(&cfg.state_dir)?;
     let state_root = cfg.state_dir.canonicalize()?;
     check_state_format(&state_root)?;
@@ -132,9 +133,9 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             }
         });
     }
-    let registry = Arc::new(crate::registry::Registry::default());
-    for (slot, entry) in &apps {
-        registry.insert(slot.clone(), &entry.hosts, false);
+    let registry = Arc::new(crate::registry::Registry::new(cfg.domain.clone()));
+    for (slot, _) in &apps {
+        registry.insert(slot.clone(), false)?;
     }
     let hub = Arc::new(Hub {
         apps: registry.clone(),
@@ -183,7 +184,17 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         cfg.compression,
     );
     if let Some(tls_cfg) = cfg.tls.clone() {
-        servers.push(crate::tls::serve(tls_cfg, &cfg.bind, &state_root, edge_router.clone(), shutdown.clone()).await?);
+        servers.push(
+            crate::tls::serve(
+                tls_cfg,
+                &cfg.bind,
+                &state_root,
+                edge_router.clone(),
+                shutdown.clone(),
+                registry.clone(),
+            )
+            .await?,
+        );
     }
     if let Some(edge) = &cfg.edge {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, edge.port).parse()?;
