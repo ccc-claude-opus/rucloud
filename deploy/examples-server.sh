@@ -231,14 +231,24 @@ if command -v ufw >/dev/null && ufw status | grep -q 'Status: active'; then
 fi
 
 say "完成"
+# 網址照 ~/rucloud.toml 實際的設定（可能已經換成自己的網域、開了 HTTPS）
+BASE="$(sed -n 's/^base = "\(.*\)".*/\1/p' "$CFG" | head -1)"
+BASE="${BASE:-$SSLIP}"
+if grep -q '^\[tls\]' "$CFG"; then SCHEME=https; else SCHEME=http; fi
+check() {
+  if [ "$SCHEME" = https ]; then
+    curl -sk -o /dev/null -w '%{http_code}' --resolve "$1:443:127.0.0.1" "https://$1/" || true
+  else
+    curl -s -o /dev/null -w '%{http_code}' -H "Host: $1" http://127.0.0.1/ || true
+  fi
+}
 printf '  %-12s %-45s %s\n' 應用 網址 直接用埠號
 for a in portal: showcase:8710 hello: myshop:8711 friendbook:8712 chat:8713 markpedia:8714 map:8715 music:8716 app-builder:8717 boardgame:8718; do
   n="${a%%:*}"; p="${a##*:}"
-  code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $n.$SSLIP" http://127.0.0.1/ || true)"
-  printf '  %-12s %-45s %s  [%s]\n' "$n" "http://$n.$SSLIP/" "${p:+http://$IP:$p/}" "$code"
+  printf '  %-12s %-45s %s  [%s]\n' "$n" "$SCHEME://$n.$BASE/" "${p:+http://$IP:$p/}" "$(check "$n.$BASE")"
 done
 echo
-echo "  首頁（所有應用的連結）：http://$SSLIP/"
+echo "  首頁（所有應用的連結）：$SCHEME://$BASE/"
 echo "  log：journalctl -u rucloud -f（service 帳號也能看）；重開：sudo systemctl restart rucloud"
 echo
 free -m | sed 's/^/  /'
