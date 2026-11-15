@@ -53,6 +53,15 @@
   .work p { margin: 8px 0 10px; }
   .tags { display: flex; flex-wrap: wrap; gap: 6px; }
   .tags span { background: var(--tag); color: var(--muted); font-size: 12px; padding: 2px 9px; border-radius: 999px; }
+  .pkgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .pkg {
+    display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; color: inherit; text-decoration: none; transition: border-color .15s;
+  }
+  .pkg:hover, .pkg:focus-visible { border-color: var(--accent); outline: none; }
+  .pkg-icon { font-size: 24px; }
+  .pkg b { display: block; }
+  .pkg small { color: var(--muted); font-size: 13px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .box { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
   .box h3 { margin: 0 0 8px; font-size: 16px; }
@@ -115,6 +124,14 @@
         <div class="tags"><span>語言學習</span><span>五語平行語料</span><span>Cloudflare Workers</span></div>
       </div>
     </a>
+  </div>
+
+  <h2>發佈的套件</h2>
+  <div class="pkgs">
+    <a class="pkg" href="https://crates.io/users/ccckmit"><span class="pkg-icon">🦀</span><span><b>crates.io</b><small>Rust · ccckmit</small></span></a>
+    <a class="pkg" href="https://www.npmjs.com/~ccckmit"><span class="pkg-icon">📦</span><span><b>npm</b><small>JavaScript · ccckmit</small></span></a>
+    <a class="pkg" href="https://pypi.org/user/ccckmit/"><span class="pkg-icon">🐍</span><span><b>PyPI</b><small>Python · ccckmit</small></span></a>
+    <a class="pkg" href="https://pypi.org/user/ccckmit2/"><span class="pkg-icon">🐍</span><span><b>PyPI</b><small>Python · ccckmit2</small></span></a>
   </div>
 
   <h2>經歷</h2>
