@@ -3,6 +3,7 @@
 
 use crate::app::{App, Ctx, Slot};
 use crate::queues::Queues;
+use crate::registry::Kind;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -295,49 +296,63 @@ pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler) -> Result<()> {
     Ok(())
 }
 
-fn valid_dynamic_name(name: &str, prefix: &str) -> Result<()> {
-    if !name.starts_with(prefix) || name.len() <= prefix.len() {
-        bail!("應用名稱必須以 {prefix} 開頭");
-    }
-    if name.len() > 63 || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+/// 應用名稱：小寫英文、數字與 -，最多 63 字（要能當網域的一段）
+fn valid_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 63
+        || name.starts_with('-')
+        || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
         bail!("應用名稱只能有小寫英文、數字與 -（最多 63 字）：{name}");
     }
     Ok(())
 }
 
-fn dynamic_list_path(ctx: &Ctx) -> PathBuf {
-    ctx.state_root.join("dynamic.json")
+fn valid_dynamic_name(name: &str, prefix: &str) -> Result<()> {
+    if !name.starts_with(prefix) || name.len() <= prefix.len() {
+        bail!("應用名稱必須以 {prefix} 開頭");
+    }
+    valid_name(name)
 }
 
-fn dynamic_list(ctx: &Ctx) -> Vec<String> {
-    std::fs::read_to_string(dynamic_list_path(ctx))
+/// 執行中新增的應用清單：dynamic.json（[dynamic]）、managed.json（部署時自動新增的）
+fn list_path(ctx: &Ctx, kind: Kind) -> PathBuf {
+    ctx.state_root
+        .join(if kind == Kind::Dynamic { "dynamic.json" } else { "managed.json" })
+}
+
+fn read_list(ctx: &Ctx, kind: Kind) -> Vec<String> {
+    std::fs::read_to_string(list_path(ctx, kind))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
 }
 
-fn save_dynamic_list(ctx: &Ctx, names: &[String]) -> Result<()> {
-    let path = dynamic_list_path(ctx);
+fn update_list(ctx: &Ctx, kind: Kind, name: &str, present: bool) -> Result<()> {
+    let mut names = read_list(ctx, kind);
+    names.retain(|x| x != name);
+    if present {
+        names.push(name.to_string());
+    }
+    let path = list_path(ctx, kind);
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(names)?)?;
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&names)?)?;
     std::fs::rename(tmp, path)?;
     Ok(())
 }
 
-/// 執行中新增的應用的設定：自己的沙箱、記憶體與卡住的上限；啟動時套用 D1 migrations。
-/// path 指到一個空資料夾：沒有 .dev.vars，也就沒有任何密鑰
-fn dynamic_entry(d: &crate::config::DynamicCfg, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
+/// 執行中新增的應用的設定。path 指到一個空資料夾：沒有 .dev.vars（密鑰用 rucloud secret 設定）。
+/// [dynamic] 的應用另外有自己的沙箱、記憶體與卡住的上限
+fn runtime_entry(dynamic: Option<&crate::config::DynamicCfg>, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
     let source = ctx.state_root.join(name).join("source");
     std::fs::create_dir_all(&source)?;
-    Ok(serde_json::from_value(serde_json::json!({
-        "path": source,
-        "name": name,
-        "instances": d.instances,
-        "memory_mb": d.memory_mb,
-        "max_block_ms": d.max_block_ms,
-        "d1_migrate": true,
-        "sandbox": true,
-    }))?)
+    let mut v = serde_json::json!({ "path": source, "name": name, "d1_migrate": true, "sandbox": true });
+    if let Some(d) = dynamic {
+        v["instances"] = d.instances.into();
+        v["memory_mb"] = d.memory_mb.into();
+        v["max_block_ms"] = d.max_block_ms.into();
+    }
+    Ok(serde_json::from_value(v)?)
 }
 
 impl Deployer {
@@ -345,71 +360,114 @@ impl Deployer {
         self.dynamic.as_ref().context("rucloud.toml 沒有 [dynamic]，不能在執行中新增應用")
     }
 
-    /// 新增應用，或替已經存在的（執行中新增的）應用部署新版本。回傳 (版本, 是不是新增的)
+    /// 用 [dynamic] 的 token：新增應用，或替已經存在的（執行中新增的）應用部署新版本
     pub async fn put_dynamic(&self, name: &str, tar_gz: Vec<u8>, message: String) -> Result<(Version, bool)> {
         let d = self.dynamic_cfg()?.clone();
         valid_dynamic_name(name, &d.prefix)?;
         let _guard = self.dynamic_lock.lock().await;
         if self.registry.get(name).is_some() {
             if !self.registry.is_dynamic(name) {
-                bail!("{name} 是 rucloud.toml 裡的應用，不能用這個 API 覆蓋");
+                bail!("{name} 不是執行中新增的應用，不能用這個 token 覆蓋");
             }
-            let (me, n, m) = (self.clone_handle(), name.to_string(), message);
-            let v = tokio::task::spawn_blocking(move || me.store(&n, &tar_gz, &m)).await??;
-            self.activate(name, Some(&v.id)).await?;
-            return Ok((v, false));
+            return Ok((self.deploy_existing(name, tar_gz, message).await?, false));
         }
         if self.registry.dynamic_count() >= d.max_apps {
             bail!("執行中新增的應用已經有 {} 個（max_apps）", d.max_apps);
         }
-        let result = self.create_dynamic(&d, name, tar_gz, message).await;
-        if result.is_err() {
-            let _ = std::fs::remove_dir_all(self.ctx.state_root.join(name));
-        }
-        result.map(|v| (v, true))
+        let entry = runtime_entry(Some(&d), &self.ctx, name)?;
+        Ok((self.create(name, entry, Kind::Dynamic, tar_gz, message).await?, true))
     }
 
-    async fn create_dynamic(&self, d: &crate::config::DynamicCfg, name: &str, tar_gz: Vec<u8>, message: String) -> Result<Version> {
-        let entry = dynamic_entry(d, &self.ctx, name)?;
-        let (me, n) = (self.clone_handle(), name.to_string());
-        let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, true, &tar_gz, &message)).await??;
-        let code = versions_dir(&self.ctx, name).join(&v.id);
-        let ctx = self.ctx.clone();
-        let slot = tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await??;
-        let app = slot.get();
-        if let Some(pool) = &app.pool {
-            wait_ready(pool, &slot).await?;
+    /// 用完整的管理 token（rucloud deploy）：應用存在就部署新版本，不存在就新增（可以用所有綁定）
+    pub async fn put_app(&self, name: &str, tar_gz: Vec<u8>, message: String) -> Result<(Version, bool)> {
+        valid_name(name)?;
+        if self.registry.is_dynamic(name) {
+            return self.put_dynamic(name, tar_gz, message).await;
         }
-        let mut m = manifest(&self.ctx, name);
-        m.current = Some(v.id.clone());
-        save_manifest(&self.ctx, name, &m)?;
-        self.registry.insert(slot.clone(), true)?;
-        restart_background(&slot, &app, &self.queues);
-        let mut list = dynamic_list(&self.ctx);
-        list.retain(|x| x != name);
-        list.push(name.to_string());
-        save_dynamic_list(&self.ctx, &list)?;
-        slot.shared.logs.push("system", &format!("新增應用，版本 {}", v.id), true);
-        tracing::info!("[{name}] 執行中新增的應用，版本 {}", v.id);
+        let _guard = self.dynamic_lock.lock().await;
+        if self.registry.get(name).is_some() {
+            return Ok((self.deploy_existing(name, tar_gz, message).await?, false));
+        }
+        if let Some(d) = &self.dynamic
+            && name.starts_with(&d.prefix)
+        {
+            bail!("{} 開頭的名稱保留給 [dynamic] 的應用", d.prefix);
+        }
+        let entry = runtime_entry(None, &self.ctx, name)?;
+        Ok((self.create(name, entry, Kind::Managed, tar_gz, message).await?, true))
+    }
+
+    async fn deploy_existing(&self, name: &str, tar_gz: Vec<u8>, message: String) -> Result<Version> {
+        let (me, n) = (self.clone_handle(), name.to_string());
+        let v = tokio::task::spawn_blocking(move || me.store(&n, &tar_gz, &message)).await??;
+        self.activate(name, Some(&v.id)).await?;
         Ok(v)
     }
 
-    /// 刪除執行中新增的應用；purge 連資料（D1、KV、R2、Durable Objects、版本）一起刪
-    pub async fn delete_dynamic(&self, name: &str, purge: bool) -> Result<()> {
-        self.dynamic_cfg()?;
+    async fn create(&self, name: &str, entry: crate::config::AppEntry, kind: Kind, tar_gz: Vec<u8>, message: String) -> Result<Version> {
+        let result = async {
+            let (me, n) = (self.clone_handle(), name.to_string());
+            let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, kind == Kind::Dynamic, &tar_gz, &message)).await??;
+            let code = versions_dir(&self.ctx, name).join(&v.id);
+            let ctx = self.ctx.clone();
+            let slot = tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await??;
+            let app = slot.get();
+            if let Some(pool) = &app.pool {
+                wait_ready(pool, &slot).await?;
+            }
+            if let Err(e) = self.registry.insert(slot.clone(), kind) {
+                if let Some(p) = &app.pool {
+                    p.stop();
+                }
+                return Err(e);
+            }
+            let mut m = manifest(&self.ctx, name);
+            m.current = Some(v.id.clone());
+            save_manifest(&self.ctx, name, &m)?;
+            self.start_app(&slot, kind);
+            update_list(&self.ctx, kind, name, true)?;
+            slot.shared.logs.push("system", &format!("新增應用，版本 {}", v.id), true);
+            tracing::info!("[{name}] 新增應用（{kind:?}），版本 {}", v.id);
+            Ok(v)
+        }
+        .await;
+        if result.is_err() && self.registry.get(name).is_none() {
+            let _ = std::fs::remove_dir_all(self.ctx.state_root.join(name));
+        }
+        result
+    }
+
+    fn start_app(&self, slot: &Arc<Slot>, kind: Kind) {
+        restart_background(slot, &slot.get(), &self.queues);
+        if kind != Kind::Dynamic {
+            let (s, stop) = (slot.clone(), slot.stopped.clone());
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = stop.cancelled() => {}
+                    _ = crate::workflows::run_loop(s.clone(), s.shared.workflows.clone()) => {}
+                }
+            });
+        }
+    }
+
+    /// 刪除執行中新增的應用（[dynamic] 的或部署時自動新增的）；purge 連資料一起刪
+    pub async fn delete_app(&self, name: &str, purge: bool) -> Result<()> {
         let _guard = self.dynamic_lock.lock().await;
-        if !self.registry.is_dynamic(name) {
-            bail!("{name} 不是執行中新增的應用");
+        let kind = self.registry.kind(name);
+        if self.registry.get(name).is_none() {
+            bail!("找不到應用 {name}");
+        }
+        if kind == Kind::Config {
+            bail!("{name} 是 rucloud.toml 裡的應用，請從設定檔移除");
         }
         let slot = self.registry.remove(name).context("找不到應用")?;
+        slot.stopped.cancel();
         slot.background.lock().unwrap().cancel();
         if let Some(pool) = &slot.get().pool {
             pool.stop();
         }
         slot.shared.logs.flush();
-        let mut list = dynamic_list(&self.ctx);
-        list.retain(|x| x != name);
-        save_dynamic_list(&self.ctx, &list)?;
+        update_list(&self.ctx, kind, name, false)?;
         if purge {
             // 等 Worker 程序真的結束，再刪資料夾
             tokio::time::sleep(Duration::from_millis(300)).await;
@@ -420,35 +478,39 @@ impl Deployer {
     }
 
     /// 啟動時載入上次執行中新增的應用
-    pub async fn load_dynamic(&self) {
-        let Some(d) = self.dynamic.clone() else { return };
-        for name in dynamic_list(&self.ctx) {
-            let entry = match dynamic_entry(&d, &self.ctx, &name) {
-                Ok(e) => e,
-                Err(e) => {
-                    tracing::error!("[{name}] 無法載入：{e:#}");
+    pub async fn load_runtime_apps(&self) {
+        for kind in [Kind::Managed, Kind::Dynamic] {
+            for name in read_list(&self.ctx, kind) {
+                let dynamic = match (kind, &self.dynamic) {
+                    (Kind::Dynamic, None) => {
+                        tracing::warn!("[{name}] rucloud.toml 沒有 [dynamic]，略過");
+                        continue;
+                    }
+                    (Kind::Dynamic, Some(d)) => Some(d),
+                    _ => None,
+                };
+                let entry = match runtime_entry(dynamic, &self.ctx, &name) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::error!("[{name}] 無法載入：{e:#}");
+                        continue;
+                    }
+                };
+                let code = code_dir(&self.ctx, &name, &entry.path);
+                if code == entry.path {
+                    tracing::warn!("[{name}] 沒有部署過的版本，略過");
                     continue;
                 }
-            };
-            let code = code_dir(&self.ctx, &name, &entry.path);
-            if code == entry.path {
-                tracing::warn!("[{name}] 沒有部署過的版本，略過");
-                continue;
-            }
-            let ctx = self.ctx.clone();
-            match tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await {
-                Ok(Ok(slot)) => {
-                    restart_background(&slot, &slot.get(), &self.queues);
-                    if let Err(e) = self.registry.insert(slot, true) {
-                        tracing::error!("[{name}] 無法載入：{e:#}");
-                    }
+                let ctx = self.ctx.clone();
+                match tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await {
+                    Ok(Ok(slot)) => match self.registry.insert(slot.clone(), kind) {
+                        Ok(()) => self.start_app(&slot, kind),
+                        Err(e) => tracing::error!("[{name}] 無法載入：{e:#}"),
+                    },
+                    Ok(Err(e)) => tracing::error!("[{name}] 無法載入：{e:#}"),
+                    Err(e) => tracing::error!("[{name}] 無法載入：{e}"),
                 }
-                Ok(Err(e)) => tracing::error!("[{name}] 無法載入：{e:#}"),
-                Err(e) => tracing::error!("[{name}] 無法載入：{e}"),
             }
-        }
-        if self.registry.dynamic_count() > 0 {
-            tracing::info!("執行中新增的應用：{} 個", self.registry.dynamic_count());
         }
     }
 

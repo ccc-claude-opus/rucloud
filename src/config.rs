@@ -407,6 +407,8 @@ pub struct AdminCfg {
     pub bind: String,
     /// 有設定時 /apps/* 需要帶 token（Authorization: Bearer 或 ?token=）
     pub token: Option<String>,
+    /// 管理 API 也透過 HTTPS 用這個網域對外（例如 admin.example.com，需要 [tls]）；會自動申請憑證
+    pub host: Option<String>,
 }
 
 fn admin_port() -> u16 {

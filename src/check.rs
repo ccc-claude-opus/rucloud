@@ -152,6 +152,13 @@ fn check_ports(cfg: &ServeConfig, r: &mut Report) {
             r.warn("[s3] secret_access_key 太短");
         }
     }
+    if let Some(h) = cfg.admin.as_ref().and_then(|a| a.host.as_deref()) {
+        if cfg.tls.is_none() {
+            r.warn(&format!("[admin] host = {h}：管理 API 只透過 HTTPS 對外，需要 [tls]"));
+        } else {
+            r.ok(&format!("管理 API：https://{h}/（沒有設 token 會自動產生）"));
+        }
+    }
     if let Some(d) = &cfg.dynamic {
         match &cfg.admin {
             None => r.err("[dynamic] 的 API 在管理埠上，需要 [admin]"),

@@ -28,6 +28,7 @@ mod r2;
 mod registry;
 mod replicate;
 mod s3;
+mod secrets;
 mod server;
 mod tls;
 mod types;
@@ -195,6 +196,20 @@ enum Cmd {
         #[command(flatten)]
         admin: cli::AdminRef,
     },
+    /// 刪除部署時新增的應用（rucloud.toml 裡的應用請從設定檔移除）
+    Delete {
+        app: String,
+        /// 連資料（D1、KV、R2、Durable Objects、版本、密鑰）一起刪
+        #[arg(long)]
+        purge: bool,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 應用的密鑰（對應 wrangler secret）：put 的值從標準輸入讀
+    Secret {
+        #[command(subcommand)]
+        cmd: SecretCmd,
+    },
     /// 列出應用的版本（* 是目前的）
     Versions {
         app: String,
@@ -264,6 +279,29 @@ enum Cmd {
         cache_ttl: u64,
         #[arg(long, default_value_t = 2)]
         retries: u32,
+    },
+}
+
+#[derive(Subcommand)]
+enum SecretCmd {
+    /// 設定密鑰：echo -n 值 | rucloud secret put 應用 名稱（或執行後輸入）
+    Put {
+        app: String,
+        name: String,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    /// 列出密鑰的名稱（值不會顯示）
+    List {
+        app: String,
+        #[command(flatten)]
+        admin: cli::AdminRef,
+    },
+    Delete {
+        app: String,
+        name: String,
+        #[command(flatten)]
+        admin: cli::AdminRef,
     },
 }
 
@@ -342,6 +380,7 @@ async fn main() -> Result<()> {
                     port,
                     bind: "127.0.0.1".into(),
                     token: None,
+                    host: None,
                 }),
                 shutdown_timeout: 10,
                 compression: true,
@@ -438,6 +477,12 @@ async fn main() -> Result<()> {
             admin,
         } => cli::deploy(&dir, app, &message, !no_activate, &admin).await,
         Cmd::Versions { app, admin } => cli::versions(&app, &admin).await,
+        Cmd::Delete { app, purge, admin } => cli::delete(&app, purge, &admin).await,
+        Cmd::Secret { cmd } => match cmd {
+            SecretCmd::Put { app, name, admin } => cli::secret_put(&app, &name, &admin).await,
+            SecretCmd::List { app, admin } => cli::secret_list(&app, &admin).await,
+            SecretCmd::Delete { app, name, admin } => cli::secret_delete(&app, &name, &admin).await,
+        },
         Cmd::Rollback { app, to, admin } => cli::rollback(&app, to.as_deref(), &admin).await,
         Cmd::Reload { app, admin } => cli::reload(&app, &admin).await,
         Cmd::Tail {

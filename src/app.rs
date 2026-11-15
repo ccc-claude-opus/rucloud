@@ -69,6 +69,8 @@ pub struct Slot {
     current: std::sync::RwLock<Arc<App>>,
     /// 目前版本的背景工作（cron、佇列消費者、鬧鐘…），換版時取消
     pub background: Mutex<tokio_util::sync::CancellationToken>,
+    /// 應用被刪除時取消（Workflows 的背景工作等跨版本的東西）
+    pub stopped: tokio_util::sync::CancellationToken,
 }
 
 impl Slot {
@@ -119,6 +121,7 @@ impl Slot {
             shared,
             current: std::sync::RwLock::new(app),
             background: Mutex::new(tokio_util::sync::CancellationToken::new()),
+            stopped: tokio_util::sync::CancellationToken::new(),
         }))
     }
 }
@@ -166,6 +169,9 @@ impl App {
             for (k, v) in config::parse_env(&text) {
                 vars.insert(k, Value::String(v));
             }
+        }
+        for (k, v) in crate::secrets::load(&ctx.state_root, &name) {
+            vars.insert(k, Value::String(v));
         }
         for (k, v) in ctx.granted.get(&name).into_iter().flatten() {
             vars.insert(k.clone(), Value::String(v.clone()));

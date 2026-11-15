@@ -33,6 +33,21 @@ pub async fn app_handler(
 #[derive(Clone, Copy)]
 pub struct ViaTls;
 
+/// 請求的主機名稱（不含埠號）；HTTP/2 沒有 Host 標頭，改看 :authority
+pub fn request_host(req: &Request) -> String {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| req.uri().authority().map(|a| a.as_str()))
+        .unwrap_or("");
+    host.rsplit_once(':')
+        .filter(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+        .map(|(h, _)| h)
+        .unwrap_or(host)
+        .to_string()
+}
+
 /// 共用入口：依 Host 找應用
 pub async fn edge_handler(
     State(registry): State<Arc<crate::registry::Registry>>,

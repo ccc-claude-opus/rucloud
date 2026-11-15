@@ -119,17 +119,31 @@ log 也會存成每天一個檔：`<state>/<應用>/logs/YYYY-MM-DD.log`（JSON 
 
 ### 部署新版本
 
-管理埠開著時，可以從任何地方部署（遠端部署請把管理埠綁到內網或放在 TLS 反向代理後面，並設定 token）：
+像 `wrangler deploy` 一樣，從自己的電腦部署到主機。主機上沒有這個應用就自動新增（不必改 `rucloud.toml`、不必重新啟動），有了就部署新版本：
+
+```toml
+[admin]
+host = "admin.example.com"       # 管理 API 透過 HTTPS 用這個網域對外（需要 [tls]，憑證自動申請）
+# token 不設就自動產生在 <state_dir>/admin-token
+```
 
 ```bash
-rucloud deploy ./myshop -m "新增報表" --admin https://admin.example.com --token …
+export RUCLOUD_ADMIN_TOKEN=…              # 主機上 <state_dir>/admin-token 的內容
+rucloud deploy ./myshop -m "新增報表" --admin https://admin.example.com
+#   已新增應用 myshop，版本 20261115-…
+#     https://myshop.example.com/         （[domain] 的子網域、wrangler routes 的網域）
+echo -n "sk-…" | rucloud secret put myshop OPENAI_API_KEY --admin https://admin.example.com
+rucloud secret list myshop                # 只列名稱，值讀不回來
+rucloud delete myshop --purge             # 刪除部署時新增的應用（--purge 連資料一起刪）
 rucloud versions myshop                   # * 是目前的版本
 rucloud rollback myshop                   # 回到上一版
 rucloud rollback myshop --to path         # 回到 rucloud.toml 的 path
 rucloud reload myshop                     # 改了 .dev.vars / env_file 之後
 ```
 
-* 打包時不含 `.dev.vars`、`.env*`、`.git`、`.wrangler`；`node_modules` 會一起上傳。
+* 打包時不含 `.dev.vars`、`.env*`、`.git`、`.wrangler`；`node_modules` 會一起上傳。密鑰請用 `rucloud secret put`（存在主機的 `<state_dir>/<應用>/secrets.json`，權限 600，蓋過 `.dev.vars` 與 `env_file`；設定後應用自動重新載入）。
+* 部署時新增的應用和 `rucloud.toml` 裡的一樣能用所有綁定（它是你自己的程式碼）；重新啟動後還在（`<state_dir>/managed.json`）。要限制綁定、資源的「替使用者跑程式碼」請用下面的 `[dynamic]`。
+* 管理 API 只在 `[admin] host` 的 HTTPS 上對外；edge 的 HTTP 埠不提供，token 不會明文傳送。
 * 切換不停機：新版本的 Worker 全部起來才換上；起不來就維持原本的版本並回報錯誤。
 * 換版的瞬間新舊程序會短暫並存：同一個 Durable Object 在舊程序裡還沒做完的事件，可能和新程序的事件重疊。
 

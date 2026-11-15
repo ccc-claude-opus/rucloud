@@ -10,7 +10,7 @@ rucloud init my-app -t d1                      # 從範本開始（rucloud init 
 rucloud dev my-app --d1-migrate                # 像 wrangler dev：http://localhost:8787
 rucloud check rucloud.toml                     # 啟動前檢查設定
 rucloud serve rucloud.toml                     # 一個程序跑多個應用（正式部署）
-rucloud deploy ./my-worker -m "新版本"          # 不停機部署到執行中的 rucloud
+rucloud deploy ./my-worker -m "新版本"          # 不停機部署到執行中的 rucloud（沒有這個應用就新增）
 ```
 
 需要 Node.js 22.15 以上（建議 24）。1.0 起遵守語意化版本，承諾範圍見 [doc/stability.md](doc/stability.md)。
@@ -88,7 +88,8 @@ flowchart LR
 | `rucloud r2 object put \| get \| list \| delete <應用資料夾> <bucket>/<key>` | 本機 R2 |
 | 管理埠首頁 <http://127.0.0.1:8799/> | 網頁管理介面：狀態、log、版本、快取、Analytics |
 | `rucloud tail <應用> [--admin http://127.0.0.1:8799] [--kind error]` | 即時看 log |
-| `rucloud deploy [資料夾] [-m 說明]`、`versions`、`rollback [--to 版本]`、`reload` | 部署新版本、版本管理（不停機） |
+| `rucloud deploy [資料夾] [-m 說明]`、`versions`、`rollback [--to 版本]`、`reload` | 部署（沒有這個應用就新增）、版本管理（不停機） |
+| `rucloud secret put \| list \| delete <應用> [名稱]`、`rucloud delete <應用> [--purge]` | 密鑰（對應 `wrangler secret`）、刪除部署時新增的應用 |
 | `rucloud purge <應用> [--prefix 主機/路徑]` | 清閘道快取 |
 | `rucloud analytics "SELECT …"` | 查 Analytics Engine |
 | `rucloud backup -o 檔案`、`rucloud restore 檔案` | 備份與還原所有資料 |

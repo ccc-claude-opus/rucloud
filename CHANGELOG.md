@@ -1,5 +1,14 @@
 # 更新紀錄
 
+## 1.6.0 — 像 `wrangler deploy` 一樣部署
+
+* **部署時自動新增應用**：`rucloud deploy` 改用 `PUT /apps/<名稱>`，主機上沒有這個應用就新增，不必改 `rucloud.toml`、不必重新啟動；可以用所有綁定、wrangler 的 `routes`；重新啟動後還在（`<state_dir>/managed.json`）。完成後印出應用的網址。
+* **`rucloud secret put | list | delete`**（對應 `wrangler secret`）：值從標準輸入讀；存在 `<state_dir>/<應用>/secrets.json`（權限 600），蓋過 `.dev.vars` 與 `env_file`；設定後應用自動重新載入；值只寫入、讀不回來。
+* **`rucloud delete <應用> [--purge]`**：刪除部署時新增的應用（或 `[dynamic]` 的應用）。
+* **`[admin] host = "admin.example.com"`**：管理 API 透過 HTTPS 用這個網域對外，憑證自動申請；只走 HTTPS，edge 的 HTTP 埠不提供。沒設 token 時自動產生（`<state_dir>/admin-token`）。這個網域保留給管理 API，應用不能用。
+* 管理 API 的 `/apps` 列出應用的種類（config / managed / dynamic）。
+* `[dynamic]` 的 prefix（預設 `gen-`）保留給執行中新增的應用，完整的管理 token 也不能用這個 prefix 新增應用。
+
 ## 1.5.0 — 自己的網域與自動憑證
 
 * **`[domain] base = "example.com"`**：每個應用自動有 `<名稱>.example.com`（執行中新增的應用也是）；`root` 指定 `example.com` 本身給哪個應用。DNS 只要把 `example.com` 與 `*.example.com` 指到這台機器一次。

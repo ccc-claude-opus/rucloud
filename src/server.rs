@@ -70,7 +70,8 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     // [dynamic]：管理 API 一定要有 token（產生的程式碼連得到本機的管理埠）；沒設就自動產生並存起來
     let mut cfg = cfg;
     let mut granted = std::collections::BTreeMap::new();
-    if let Some(d) = &mut cfg.dynamic {
+    // [admin] host（管理 API 透過 HTTPS 對外）也一定要有 token
+    if cfg.dynamic.is_some() || cfg.admin.as_ref().is_some_and(|a| a.host.is_some()) {
         let admin = cfg.admin.as_mut().context("[dynamic] 的 API 在管理埠上，需要 [admin]")?;
         if admin.token.is_none() {
             let path = state_root.join("admin-token");
@@ -84,9 +85,12 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
                     t
                 }
             };
-            tracing::info!("[dynamic] 管理 API 的 token 在 {}", path.display());
+            tracing::info!("管理 API 的 token 在 {}", path.display());
             admin.token = Some(token);
         }
+    }
+    if let Some(d) = &mut cfg.dynamic {
+        let admin = cfg.admin.as_ref().context("[dynamic] 的 API 在管理埠上，需要 [admin]")?;
         let token = d.token.get_or_insert_with(|| format!("{:032x}", rand::random::<u128>())).clone();
         let url = format!("http://127.0.0.1:{}", admin.port);
         for name in &d.grant {
@@ -134,8 +138,11 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         });
     }
     let registry = Arc::new(crate::registry::Registry::new(cfg.domain.clone()));
+    if let Some(h) = cfg.admin.as_ref().and_then(|a| a.host.as_deref()) {
+        registry.reserve(h);
+    }
     for (slot, _) in &apps {
-        registry.insert(slot.clone(), false)?;
+        registry.insert(slot.clone(), crate::registry::Kind::Config)?;
     }
     let hub = Arc::new(Hub {
         apps: registry.clone(),
@@ -179,22 +186,65 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         crate::deploy::restart_background(slot, &app, &queues);
         tokio::spawn(crate::workflows::run_loop(slot.clone(), slot.shared.workflows.clone()));
     }
+    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let deployer = Arc::new(crate::deploy::Deployer {
+        ctx: ctx.clone(),
+        registry: registry.clone(),
+        queues: queues.clone(),
+        grace: Duration::from_secs(cfg.shutdown_timeout),
+        dynamic: cfg.dynamic.clone(),
+        dynamic_lock: Default::default(),
+    });
+    // 上次執行中新增的應用（部署時自動新增的、[dynamic] 的）
+    deployer.load_runtime_apps().await;
+    let mut admin_router: Option<Router> = None;
+    if let Some(admin_cfg) = cfg.admin.clone() {
+        let addr: SocketAddr = format!("{}:{}", admin_cfg.bind, admin_cfg.port).parse()?;
+        let admin = Arc::new(crate::admin::Admin {
+            apps: registry.clone(),
+            queues: queues.clone(),
+            token: admin_cfg.token.clone(),
+            draining: draining.clone(),
+            dynamic_token: cfg.dynamic.as_ref().and_then(|d| d.token.clone()),
+            dynamic_prefix: cfg.dynamic.as_ref().map(|d| d.prefix.clone()),
+            deployer: deployer.clone(),
+            analytics: analytics.clone(),
+        });
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("無法監聽 {addr}"))?;
+        // 管理埠不掛 shutdown：關閉期間 /health 回 503，負載平衡器才知道要把流量移走
+        let router = crate::admin::router(admin);
+        admin_router = Some(router.clone());
+        tokio::spawn(async move { axum::serve(listener, router).await });
+        tracing::info!("管理埠：http://{addr}（/health、/metrics、/apps/<應用>/tail）");
+    }
+
     let edge_router = compressed(
         Router::new().fallback(any(gateway::edge_handler)).with_state(registry.clone()),
         cfg.compression,
     );
     if let Some(tls_cfg) = cfg.tls.clone() {
-        servers.push(
-            crate::tls::serve(
-                tls_cfg,
-                &cfg.bind,
-                &state_root,
-                edge_router.clone(),
-                shutdown.clone(),
-                registry.clone(),
-            )
-            .await?,
-        );
+        // [admin] host：這個網域的 HTTPS 請求交給管理 API（只走 HTTPS，token 不會明文傳送）
+        let mut https_router = edge_router.clone();
+        if let (Some(host), Some(ar)) = (cfg.admin.as_ref().and_then(|a| a.host.clone()), admin_router.clone()) {
+            https_router = https_router.layer(axum::middleware::from_fn(
+                move |req: axum::extract::Request, next: axum::middleware::Next| {
+                    let (host, ar) = (host.clone(), ar.clone());
+                    async move {
+                        if gateway::request_host(&req).eq_ignore_ascii_case(&host) {
+                            use tower::ServiceExt;
+                            return match ar.oneshot(req).await {
+                                Ok(r) => r,
+                                Err(e) => match e {},
+                            };
+                        }
+                        next.run(req).await
+                    }
+                },
+            ));
+        }
+        servers.push(crate::tls::serve(tls_cfg, &cfg.bind, &state_root, https_router, shutdown.clone(), registry.clone()).await?);
     }
     if let Some(edge) = &cfg.edge {
         let addr: SocketAddr = format!("{}:{}", cfg.bind, edge.port).parse()?;
@@ -233,39 +283,6 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             .with_context(|| format!("無法監聽 {addr}"))?;
         serve!(listener, crate::s3::router(s3));
         tracing::info!("R2 的 S3 API：http://{addr}（path-style）");
-    }
-
-    let draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let deployer = Arc::new(crate::deploy::Deployer {
-        ctx: ctx.clone(),
-        registry: registry.clone(),
-        queues: queues.clone(),
-        grace: Duration::from_secs(cfg.shutdown_timeout),
-        dynamic: cfg.dynamic.clone(),
-        dynamic_lock: Default::default(),
-    });
-    // 上次執行中新增的應用（[dynamic]）
-    if cfg.dynamic.is_some() {
-        deployer.load_dynamic().await;
-    }
-    if let Some(admin_cfg) = cfg.admin.clone() {
-        let addr: SocketAddr = format!("{}:{}", admin_cfg.bind, admin_cfg.port).parse()?;
-        let admin = Arc::new(crate::admin::Admin {
-            apps: registry.clone(),
-            queues: queues.clone(),
-            token: admin_cfg.token.clone(),
-            draining: draining.clone(),
-            dynamic_token: cfg.dynamic.as_ref().and_then(|d| d.token.clone()),
-            dynamic_prefix: cfg.dynamic.as_ref().map(|d| d.prefix.clone()),
-            deployer: deployer.clone(),
-            analytics: analytics.clone(),
-        });
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .with_context(|| format!("無法監聽 {addr}"))?;
-        // 管理埠不掛 shutdown：關閉期間 /health 回 503，負載平衡器才知道要把流量移走
-        tokio::spawn(async move { axum::serve(listener, crate::admin::router(admin)).await });
-        tracing::info!("管理埠：http://{addr}（/health、/metrics、/apps/<應用>/tail）");
     }
 
     let replica = cfg

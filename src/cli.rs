@@ -550,25 +550,95 @@ pub async fn deploy(dir: &Path, app: Option<String>, message: &str, activate: bo
     let d2 = dir.clone();
     let body = tokio::task::spawn_blocking(move || crate::deploy::pack(&d2)).await??;
     eprintln!("打包 {}：{:.1} KB", dir.display(), body.len() as f64 / 1024.0);
-    let path = format!(
-        "/apps/{}/versions?activate={activate}&message={}",
-        urlencoding::encode(&name),
-        urlencoding::encode(message)
-    );
-    let v = admin
-        .send(
-            admin
-                .req(reqwest::Method::POST, &path)
-                .header("content-type", "application/gzip")
-                .body(body),
+    // 啟用：PUT /apps/<名稱>（應用不存在就新增）；只上傳：POST 到已經存在的應用
+    let (method, path) = if activate {
+        (
+            reqwest::Method::PUT,
+            format!("/apps/{}?message={}", urlencoding::encode(&name), urlencoding::encode(message)),
         )
+    } else {
+        (
+            reqwest::Method::POST,
+            format!(
+                "/apps/{}/versions?activate=false&message={}",
+                urlencoding::encode(&name),
+                urlencoding::encode(message)
+            ),
+        )
+    };
+    let v = admin
+        .send(admin.req(method, &path).header("content-type", "application/gzip").body(body))
         .await?;
     let id = v["version"]["id"].as_str().unwrap_or("");
-    if activate {
-        println!("已部署 {name} 版本 {id}");
-    } else {
+    if !activate {
         println!("已上傳 {name} 版本 {id}（尚未啟用）");
+    } else if v["created"] == true {
+        println!("已新增應用 {name}，版本 {id}");
+    } else {
+        println!("已部署 {name} 版本 {id}");
     }
+    let https = if admin.admin.starts_with("https://") { "https" } else { "http" };
+    for h in v["hosts"].as_array().into_iter().flatten().filter_map(|h| h.as_str()) {
+        println!("  {https}://{h}/");
+    }
+    Ok(())
+}
+
+/// 刪除部署時新增的應用（或 [dynamic] 的應用）
+pub async fn delete(app: &str, purge: bool, admin: &AdminRef) -> Result<()> {
+    admin
+        .send(admin.req(
+            reqwest::Method::DELETE,
+            &format!("/apps/{}?purge={purge}", urlencoding::encode(app)),
+        ))
+        .await?;
+    println!(
+        "已刪除 {app}{}",
+        if purge {
+            "（含資料）"
+        } else {
+            "（資料保留在 state 資料夾）"
+        }
+    );
+    Ok(())
+}
+
+/// rucloud secret put：值從標準輸入讀（不會留在 shell 的歷史紀錄）
+pub async fn secret_put(app: &str, name: &str, admin: &AdminRef) -> Result<()> {
+    use std::io::{IsTerminal, Read};
+    crate::secrets::valid_name(name)?;
+    let mut value = String::new();
+    if std::io::stdin().is_terminal() {
+        eprint!("輸入 {name} 的值，按 Enter：");
+        std::io::stdin().read_line(&mut value)?;
+    } else {
+        std::io::stdin().read_to_string(&mut value)?;
+    }
+    let value = value.strip_suffix('\n').unwrap_or(&value);
+    let value = value.strip_suffix('\r').unwrap_or(value).to_string();
+    if value.is_empty() {
+        bail!("值是空的");
+    }
+    let path = format!("/apps/{}/secrets/{}", urlencoding::encode(app), urlencoding::encode(name));
+    admin.send(admin.req(reqwest::Method::PUT, &path).body(value)).await?;
+    println!("已設定 {app} 的 {name}（應用已重新載入）");
+    Ok(())
+}
+
+pub async fn secret_list(app: &str, admin: &AdminRef) -> Result<()> {
+    let v = admin
+        .send(admin.req(reqwest::Method::GET, &format!("/apps/{}/secrets", urlencoding::encode(app))))
+        .await?;
+    for n in v["secrets"].as_array().into_iter().flatten().filter_map(|n| n.as_str()) {
+        println!("{n}");
+    }
+    Ok(())
+}
+
+pub async fn secret_delete(app: &str, name: &str, admin: &AdminRef) -> Result<()> {
+    let path = format!("/apps/{}/secrets/{}", urlencoding::encode(app), urlencoding::encode(name));
+    admin.send(admin.req(reqwest::Method::DELETE, &path)).await?;
+    println!("已刪除 {app} 的 {name}（應用已重新載入）");
     Ok(())
 }
 

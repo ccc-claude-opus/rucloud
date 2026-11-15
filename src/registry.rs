@@ -9,6 +9,17 @@ use anyhow::{Result, bail};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
+/// 應用的來源
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// rucloud.toml 裡的應用
+    Config,
+    /// 用完整的管理 token 部署時自動新增的應用（自己的程式碼，可以用所有綁定）
+    Managed,
+    /// [dynamic]：替使用者執行的程式碼（不可信，綁定有限制）
+    Dynamic,
+}
+
 #[derive(Default)]
 pub struct Registry {
     apps: RwLock<BTreeMap<String, Arc<Slot>>>,
@@ -16,6 +27,9 @@ pub struct Registry {
     hosts: RwLock<HashMap<String, Arc<Slot>>>,
     /// 執行中新增的應用名稱
     dynamic: RwLock<BTreeSet<String>>,
+    managed: RwLock<BTreeSet<String>>,
+    /// 保留的網域（例如管理介面的 [admin] host）：應用不能用，但會申請憑證
+    reserved: RwLock<BTreeSet<String>>,
     pub domain: Option<DomainCfg>,
 }
 
@@ -50,12 +64,14 @@ impl Registry {
         out
     }
 
-    pub fn insert(&self, slot: Arc<Slot>, dynamic: bool) -> Result<()> {
-        let hosts = self.hosts_for(&slot, dynamic);
+    pub fn insert(&self, slot: Arc<Slot>, kind: Kind) -> Result<()> {
+        let hosts = self.hosts_for(&slot, kind == Kind::Dynamic);
         self.check_hosts(&slot.name, &hosts)?;
-        if dynamic {
-            self.dynamic.write().unwrap().insert(slot.name.clone());
-        }
+        match kind {
+            Kind::Dynamic => self.dynamic.write().unwrap().insert(slot.name.clone()),
+            Kind::Managed => self.managed.write().unwrap().insert(slot.name.clone()),
+            Kind::Config => true,
+        };
         self.apps.write().unwrap().insert(slot.name.clone(), slot.clone());
         self.set_hosts(&slot, hosts);
         Ok(())
@@ -64,7 +80,11 @@ impl Registry {
     /// 網域不能和其他應用重複
     pub fn check_hosts(&self, name: &str, hosts: &[String]) -> Result<()> {
         let map = self.hosts.read().unwrap();
+        let reserved = self.reserved.read().unwrap();
         for h in hosts {
+            if reserved.contains(h) {
+                bail!("網域 {h} 保留給 rucloud（例如管理介面）");
+            }
             if let Some(other) = map.get(h)
                 && other.name != name
             {
@@ -94,6 +114,7 @@ impl Registry {
         let slot = self.apps.write().unwrap().remove(name)?;
         self.hosts.write().unwrap().retain(|_, s| !Arc::ptr_eq(s, &slot));
         self.dynamic.write().unwrap().remove(name);
+        self.managed.write().unwrap().remove(name);
         Some(slot)
     }
 
@@ -119,16 +140,22 @@ impl Registry {
         v
     }
 
-    /// 所有應用的網域（自動憑證用）
+    /// 所有應用的網域與保留的網域（自動憑證用）
     pub fn all_hosts(&self) -> Vec<String> {
         let mut v: Vec<String> = self.hosts.read().unwrap().keys().cloned().collect();
+        v.extend(self.reserved.read().unwrap().iter().cloned());
         v.sort();
         v
     }
 
-    /// 精確比對網域
+    /// 精確比對網域（應用的或保留的）
     pub fn owns_host(&self, host: &str) -> bool {
-        self.hosts.read().unwrap().contains_key(&host.to_ascii_lowercase())
+        let host = host.to_ascii_lowercase();
+        self.hosts.read().unwrap().contains_key(&host) || self.reserved.read().unwrap().contains(&host)
+    }
+
+    pub fn reserve(&self, host: &str) {
+        self.reserved.write().unwrap().insert(host.to_ascii_lowercase());
     }
 
     /// edge 用：先精確比對網域，再用第一段當應用名稱（myapp.localhost → myapp，開發時方便）
@@ -142,6 +169,20 @@ impl Registry {
 
     pub fn is_dynamic(&self, name: &str) -> bool {
         self.dynamic.read().unwrap().contains(name)
+    }
+
+    pub fn is_managed(&self, name: &str) -> bool {
+        self.managed.read().unwrap().contains(name)
+    }
+
+    pub fn kind(&self, name: &str) -> Kind {
+        if self.is_dynamic(name) {
+            Kind::Dynamic
+        } else if self.is_managed(name) {
+            Kind::Managed
+        } else {
+            Kind::Config
+        }
     }
 
     pub fn dynamic_count(&self) -> usize {

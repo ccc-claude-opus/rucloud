@@ -139,7 +139,7 @@ port = ${helloPort}
       assert.equal(r.status, status, `${path}: ${JSON.stringify(r.body)}`);
       if (re) assert.match(JSON.stringify(r.body), re);
     };
-    await bad('/apps/hello', pack(notesApp('x')), ADMIN_TOKEN, 400, /必須以 gen- 開頭/);
+    await bad('/apps/gen-zzz', pack(notesApp('x')), ADMIN_TOKEN, 400, /保留給 \[dynamic\]/);
     await bad('/apps/hello', pack(notesApp('x')), DYN_TOKEN, 403);
     await bad('/apps/gen-x', pack(notesApp('x')), 'wrong-token', 401);
     await bad('/apps/gen-Bad_Name', pack(notesApp('x')), DYN_TOKEN, 400, /小寫英文/);

@@ -50,6 +50,8 @@ pub fn router(admin: Arc<Admin>) -> Router {
     let protected = Router::new()
         .route("/apps", get(apps))
         .route("/apps/{app}", axum::routing::put(put_app).delete(delete_app))
+        .route("/apps/{app}/secrets", get(list_secrets))
+        .route("/apps/{app}/secrets/{name}", axum::routing::put(put_secret).delete(delete_secret))
         .route("/apps/{app}/logs", get(logs))
         .route("/apps/{app}/tail", get(tail))
         .route("/apps/{app}/versions", get(versions).post(upload))
@@ -83,6 +85,8 @@ async fn auth(State(admin): S, req: Request, next: Next) -> Response {
     let given = bearer.or(query);
     if given.is_some() && given == admin.dynamic_token.as_deref() {
         if dynamic_scope(&admin, req.method(), req.uri().path()) {
+            let mut req = req;
+            req.extensions_mut().insert(DynamicScope);
             return next.run(req).await;
         }
         return (StatusCode::FORBIDDEN, "這個 token 只能管理執行中新增的應用\n").into_response();
@@ -94,6 +98,10 @@ async fn auth(State(admin): S, req: Request, next: Next) -> Response {
     }
     next.run(req).await
 }
+
+/// 標記：這個請求用的是 [dynamic] 的 token
+#[derive(Clone, Copy)]
+struct DynamicScope;
 
 /// [dynamic] 的 token 能做的事：PUT / DELETE /apps/<名稱>，GET /apps/<名稱>/logs、versions（名稱以 prefix 開頭）
 fn dynamic_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
@@ -176,6 +184,7 @@ async fn apps(State(admin): S) -> axum::Json<serde_json::Value> {
                 json!({
                     "name": n,
                     "dynamic": admin.apps.is_dynamic(n),
+                    "kind": format!("{:?}", admin.apps.kind(n)).to_lowercase(),
                     "hosts": admin.apps.hosts_of(n),
                     "dir": a.dir,
                     "instances": a.pool.as_ref().map(|p| p.len()),
@@ -265,13 +274,69 @@ async fn upload(State(admin): S, Path(app): Path<String>, Query(q): Query<Upload
     axum::Json(json!({ "version": v, "active": q.activate.unwrap_or(true) })).into_response()
 }
 
-/// 新增應用或部署新版本（rucloud.toml 的 [dynamic]）：body 是 tar.gz
-async fn put_app(State(admin): S, Path(app): Path<String>, Query(q): Query<UploadQuery>, body: axum::body::Bytes) -> Response {
-    match admin.deployer.put_dynamic(&app, body.to_vec(), q.message.unwrap_or_default()).await {
+/// 新增應用或部署新版本：body 是 tar.gz。
+/// 完整的管理 token：應用不存在就新增（rucloud deploy）；[dynamic] 的 token：只能管 prefix 開頭、有限制的應用
+async fn put_app(
+    State(admin): S,
+    Path(app): Path<String>,
+    Query(q): Query<UploadQuery>,
+    scope: Option<axum::Extension<DynamicScope>>,
+    body: axum::body::Bytes,
+) -> Response {
+    let msg = q.message.unwrap_or_default();
+    let result = if scope.is_some() {
+        admin.deployer.put_dynamic(&app, body.to_vec(), msg).await
+    } else {
+        admin.deployer.put_app(&app, body.to_vec(), msg).await
+    };
+    match result {
         Ok((v, created)) => {
             let status = if created { StatusCode::CREATED } else { StatusCode::OK };
-            (status, axum::Json(json!({ "app": app, "created": created, "version": v }))).into_response()
+            let hosts = admin.apps.hosts_of(&app);
+            (
+                status,
+                axum::Json(json!({ "app": app, "created": created, "version": v, "hosts": hosts })),
+            )
+                .into_response()
         }
+        Err(e) => fail(e),
+    }
+}
+
+// ---------- 密鑰 ----------
+
+async fn list_secrets(State(admin): S, Path(app): Path<String>) -> Response {
+    if admin.apps.get(&app).is_none() {
+        return not_found(&app);
+    }
+    let names: Vec<String> = crate::secrets::load(&admin.deployer.ctx.state_root, &app).into_keys().collect();
+    axum::Json(json!({ "secrets": names })).into_response()
+}
+
+/// 設定密鑰後重新載入應用（新的 Worker 程序起來才換掉舊的）
+async fn put_secret(State(admin): S, Path((app, name)): Path<(String, String)>, body: String) -> Response {
+    if admin.apps.get(&app).is_none() {
+        return not_found(&app);
+    }
+    if let Err(e) = crate::secrets::put(&admin.deployer.ctx.state_root, &app, &name, &body) {
+        return fail(e);
+    }
+    match admin.deployer.reload(&app).await {
+        Ok(()) => axum::Json(json!({ "app": app, "secret": name })).into_response(),
+        Err(e) => fail(e.context("密鑰已存，但重新載入失敗")),
+    }
+}
+
+async fn delete_secret(State(admin): S, Path((app, name)): Path<(String, String)>) -> Response {
+    if admin.apps.get(&app).is_none() {
+        return not_found(&app);
+    }
+    match crate::secrets::delete(&admin.deployer.ctx.state_root, &app, &name) {
+        Ok(false) => (StatusCode::NOT_FOUND, axum::Json(json!({ "error": format!("沒有密鑰 {name}") }))).into_response(),
+        Ok(true) => match admin.deployer.reload(&app).await {
+            Ok(()) => axum::Json(json!({ "app": app, "deleted": name })).into_response(),
+            Err(e) => fail(e.context("密鑰已刪，但重新載入失敗")),
+        },
         Err(e) => fail(e),
     }
 }
@@ -283,7 +348,7 @@ struct DeleteQuery {
 
 async fn delete_app(State(admin): S, Path(app): Path<String>, Query(q): Query<DeleteQuery>) -> Response {
     let purge = q.purge.unwrap_or(false);
-    match admin.deployer.delete_dynamic(&app, purge).await {
+    match admin.deployer.delete_app(&app, purge).await {
         Ok(()) => axum::Json(json!({ "deleted": app, "purged": purge })).into_response(),
         Err(e) => fail(e),
     }

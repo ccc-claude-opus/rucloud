@@ -85,13 +85,13 @@ test('ACME：啟動時替網域申請、on-demand、只發給屬於應用的網�
     const r = await fetchText(`https://127.0.0.1:${httpsPort}/`, { ca: root, servername: 'hello.example.test', host: 'hello.example.test' });
     assert.equal(r.body, 'hi hello.example.test https:');
 
-    // on-demand：執行中新增的應用，第一次連線才申請
+    // on-demand：部署時新增的應用，第一次連線才申請
     const tar = execFileSync('tar', ['-czf', '-', '-C', app, '.'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
-    const put = await fetch(`http://127.0.0.1:${adminPort}/apps/gen-a`, { method: 'PUT', body: tar, headers: { authorization: 'Bearer admin-token-0123456789' } });
+    const put = await fetch(`http://127.0.0.1:${adminPort}/apps/late`, { method: 'PUT', body: tar, headers: { authorization: 'Bearer admin-token-0123456789' } });
     assert.equal(put.status, 201);
-    const d = await fetchText(`https://127.0.0.1:${httpsPort}/`, { ca: root, servername: 'gen-a.example.test', host: 'gen-a.example.test' });
-    assert.equal(d.body, 'hi gen-a.example.test https:');
-    assert.ok(existsSync(join(rc.state, 'acme', 'certs', 'gen-a.example.test.crt')));
+    const d = await fetchText(`https://127.0.0.1:${httpsPort}/`, { ca: root, servername: 'late.example.test', host: 'late.example.test' });
+    assert.equal(d.body, 'hi late.example.test https:');
+    assert.ok(existsSync(join(rc.state, 'acme', 'certs', 'late.example.test.crt')));
 
     // 不屬於任何應用的網域：不申請，交握失敗
     await assert.rejects(fetchText(`https://127.0.0.1:${httpsPort}/`, { ca: root, servername: 'nobody.example.test', host: 'nobody.example.test' }));
