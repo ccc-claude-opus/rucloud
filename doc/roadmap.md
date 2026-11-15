@@ -59,7 +59,7 @@
 |---|---|---|
 | 1.5.0 ✓ | 自己的網域與自動憑證 | `[domain]` 自動子網域、wrangler `routes`、每個網域一張憑證與 on-demand、`trusted_proxies` |
 | 1.6.0 ✓ | 像 `wrangler deploy` 一樣部署 | 部署時自動新增應用、`rucloud secret`、管理 API 透過 HTTPS 對外 |
-| 1.7.0 | 新主機幾分鐘架好 | 萬用字元憑證（DNS-01：Cloudflare、Linode）、預編執行檔、安裝腳本與 systemd |
+| 1.7.0 ✓ | 新主機幾分鐘架好 | 萬用字元憑證（DNS-01：Cloudflare、Linode）、預編執行檔、安裝腳本與 systemd |
 
 ## 之後再考慮
 

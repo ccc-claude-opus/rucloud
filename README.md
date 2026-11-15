@@ -15,6 +15,14 @@ rucloud deploy ./my-worker -m "新版本"          # 不停機部署到執行中
 
 需要 Node.js 22.15 以上（建議 24）。1.0 起遵守語意化版本，承諾範圍見 [doc/stability.md](doc/stability.md)。
 
+在新的 Linux 主機上架成像 Cloudflare 一樣（自己的網域、自動子網域與 HTTPS、`rucloud deploy`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ccc-claude-opus/rucloud/main/install.sh | sudo bash -s -- --domain example.com --email me@example.com
+```
+
+詳見 [doc/deploy.md](doc/deploy.md) 的「新主機」。
+
 ## 架構
 
 ```mermaid

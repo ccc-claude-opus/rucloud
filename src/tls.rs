@@ -90,8 +90,16 @@ pub async fn serve(
     let certs = match (&cfg.cert, &cfg.key, &cfg.acme) {
         (Some(c), Some(k), None) => Certs::Static(load_static(c, k)?),
         (None, None, Some(acme_cfg)) => {
+            let mut acme_cfg = acme_cfg.clone();
+            // 有 DNS API、沒寫 wildcard 時，用 [domain] 的 base
+            if acme_cfg.dns.is_some()
+                && acme_cfg.wildcard.is_empty()
+                && let Some(d) = &registry.domain
+            {
+                acme_cfg.wildcard.push(d.base.clone());
+            }
             let reg = registry.clone();
-            let acme = crate::acme::Acme::new(acme_cfg.clone(), state_root, Box::new(move |h| reg.owns_host(h)))?;
+            let acme = crate::acme::Acme::new(acme_cfg, state_root, Box::new(move |h| reg.owns_host(h)))?;
             let normal = with_alpn(resolver_config(Arc::new(crate::acme::Resolver(acme.clone())))?);
             // 先替所有應用的網域申請，之後定期續期
             let reg = registry.clone();

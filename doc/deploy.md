@@ -213,7 +213,57 @@ rucloud backup --state /var/lib/rucloud -o backup-$(date +%F).tar.gz   # 執行�
 rucloud restore backup-2026-11-04.tar.gz --state /var/lib/rucloud       # 先停掉 rucloud
 ```
 
-## 3. Docker
+## 3. 新主機（Linode、DigitalOcean、Hetzner…）
+
+目標：一台新的 Linux 主機加一個網域，幾分鐘後就能像 Cloudflare 一樣 `rucloud deploy`，應用自動有 `https://<名稱>.example.com`。
+
+1. **DNS**（只做一次）：`example.com` 與 `*.example.com` 的 A 記錄指到主機的 IP。
+2. **安裝**（在主機上）：
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/ccc-claude-opus/rucloud/main/install.sh | sudo bash -s -- --domain example.com --email me@example.com
+   ```
+
+   會下載 rucloud（GitHub Releases，驗證 SHA-256）、沒有的話裝 Node.js 24、建立系統使用者 `rucloud`、`/etc/rucloud/rucloud.toml`（`[domain]`、`[tls]` 自動憑證、`[admin] host = "admin.example.com"`）、`/var/lib/rucloud`，以及 systemd 服務（非 root 也能聽 80 / 443）。加 `--firewall` 會用 ufw 只開 22、80、443。再跑一次就是升級，設定與資料不動。
+
+3. **部署**（在自己的電腦上）：
+
+   ```bash
+   export RUCLOUD_ADMIN_TOKEN=$(ssh 主機 sudo cat /var/lib/rucloud/admin-token)
+   rucloud deploy ./my-app --admin https://admin.example.com
+   #   https://my-app.example.com/
+   ```
+
+### 萬用字元憑證
+
+預設每個網域各申請一張憑證（TLS-ALPN-01，不需要 DNS API）。Let's Encrypt 對同一個主網域每週發的憑證數量有上限，應用很多（例如 `[dynamic]`）時改用萬用字元憑證：一張 `*.example.com` 涵蓋所有子網域。需要 DNS 供應商的 API（DNS-01 驗證）：
+
+```toml
+[tls.acme]
+email = ["me@example.com"]
+dns = { provider = "cloudflare" }     # 或 "linode"
+# wildcard = ["example.com"]          # 不寫就用 [domain] 的 base
+# propagation_seconds = 30            # 建立 TXT 記錄後等 DNS 生效的秒數；Linode 可能要調長
+```
+
+API token 放在 `/etc/rucloud/env`（權限 600，systemd 會讀）：
+
+```bash
+CLOUDFLARE_API_TOKEN=…     # Cloudflare：Zone → DNS → Edit 權限
+LINODE_TOKEN=…             # Linode：Domains 讀寫權限
+```
+
+### 前面再套 Cloudflare 的代理
+
+一台主機沒有全球節點、DDoS 防護與 CDN。需要的話把 DNS 開成 Cloudflare 的代理（橘色雲朵），並在 `rucloud.toml` 加上：
+
+```toml
+trusted_proxies = ["127.0.0.1", "cloudflare"]
+```
+
+Worker 看到的 `cf-connecting-ip` 就是真實的使用者 IP。Cloudflare 的 SSL 模式請用「Full (strict)」（rucloud 上有 Let's Encrypt 的正式憑證）。
+
+## 4. Docker
 
 repo 附的 `docker-compose.yml` 直接把 test-apps 跑起來：
 
@@ -243,7 +293,7 @@ COPY . /srv/app
 CMD ["dev", "/srv/app", "--bind", "0.0.0.0", "--state", "/data", "--no-watch", "--instances", "4"]
 ```
 
-## 4. 發佈到 crates.io
+## 5. 發佈到 crates.io
 
 ```bash
 cargo publish --dry-run --target-dir target/publish-check   # 檢查打包內容（含 runtime/*.mjs）

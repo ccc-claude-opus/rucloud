@@ -1,5 +1,13 @@
 # 更新紀錄
 
+## 1.7.0 — 新主機幾分鐘架好
+
+* **萬用字元憑證**（DNS-01）：`[tls.acme] dns = { provider = "cloudflare" | "linode" }`，一張 `*.example.com` 加 `example.com` 涵蓋所有子網域（`wildcard` 不寫就用 `[domain]` 的 base），被涵蓋的網域不再個別申請。API token 可以放環境變數 `CLOUDFLARE_API_TOKEN` / `LINODE_TOKEN`。用完的 TXT 記錄會刪掉。
+* **預編執行檔**：推送 tag 時 GitHub Actions 編譯 Linux x86_64 / arm64（musl 靜態連結）與 macOS arm64，附 SHA-256，上傳到 GitHub Releases。
+* **`install.sh`**：在新的 Linux 主機上一行安裝：rucloud、Node.js 24（沒有才裝，驗證 SHA-256）、系統使用者、`/etc/rucloud/rucloud.toml`（`--domain` 產生網域、自動憑證、管理介面的設定）、systemd 服務（非 root 聽 80 / 443、ProtectSystem=strict 等限制）；`--firewall` 用 ufw 只開 22、80、443。再跑一次就是升級。
+* 文件：「新主機」一節（DNS、安裝、部署、萬用字元憑證、前面再套 Cloudflare 的代理）。
+* 整合測試：萬用字元憑證用 Pebble 加上模擬的 Cloudflare / Linode API 測試。
+
 ## 1.6.0 — 像 `wrangler deploy` 一樣部署
 
 * **部署時自動新增應用**：`rucloud deploy` 改用 `PUT /apps/<名稱>`，主機上沒有這個應用就新增，不必改 `rucloud.toml`、不必重新啟動；可以用所有綁定、wrangler 的 `routes`；重新啟動後還在（`<state_dir>/managed.json`）。完成後印出應用的網址。
