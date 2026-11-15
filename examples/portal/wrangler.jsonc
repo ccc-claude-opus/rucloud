@@ -1,0 +1,7 @@
+// portal：列出所有範例應用的首頁（只有靜態檔案）
+// 連結依目前的網域產生：rucloud.cc → https://myshop.rucloud.cc/；portal.localhost:8700 → http://myshop.localhost:8700/
+{
+  "name": "portal",
+  "compatibility_date": "2025-11-01",
+  "assets": { "directory": "./public" }
+}

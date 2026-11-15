@@ -14,6 +14,11 @@ port = 8799
 [dynamic]
 grant = ["app-builder"]
 
+# 首頁：列出所有範例應用的連結（http://portal.localhost:8700）
+[[app]]
+path = "portal"
+port = 8719
+
 [[app]]
 path = "showcase"
 port = 8710

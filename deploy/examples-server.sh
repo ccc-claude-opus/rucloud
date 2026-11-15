@@ -114,7 +114,7 @@ port = 80
 # 有了網域：把 base 改成你的網域，DNS 設 A 記錄（網域與 *.網域 → $IP），再加上下面的 [tls]
 [domain]
 base = "$SSLIP"
-root = "showcase"
+root = "portal"
 
 # [tls]
 # port = 443
@@ -130,6 +130,10 @@ port = 8799
 [dynamic]
 grant = ["app-builder"]
 memory_mb = 96
+
+# 首頁：列出所有應用的連結（網域本身）
+[[app]]
+path = "$E/portal"
 
 [[app]]
 path = "$E/showcase"
@@ -228,13 +232,13 @@ fi
 
 say "完成"
 printf '  %-12s %-45s %s\n' 應用 網址 直接用埠號
-for a in showcase:8710 hello: myshop:8711 friendbook:8712 chat:8713 markpedia:8714 map:8715 music:8716 app-builder:8717 boardgame:8718; do
+for a in portal: showcase:8710 hello: myshop:8711 friendbook:8712 chat:8713 markpedia:8714 map:8715 music:8716 app-builder:8717 boardgame:8718; do
   n="${a%%:*}"; p="${a##*:}"
   code="$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $n.$SSLIP" http://127.0.0.1/ || true)"
   printf '  %-12s %-45s %s  [%s]\n' "$n" "http://$n.$SSLIP/" "${p:+http://$IP:$p/}" "$code"
 done
 echo
-echo "  首頁（showcase）：http://$SSLIP/"
+echo "  首頁（所有應用的連結）：http://$SSLIP/"
 echo "  log：journalctl -u rucloud -f（service 帳號也能看）；重開：sudo systemctl restart rucloud"
 echo
 free -m | sed 's/^/  /'

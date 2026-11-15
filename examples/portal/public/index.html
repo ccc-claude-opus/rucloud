@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rucloud 範例</title>
+<meta name="description" content="自架的 Cloudflare Workers 平台 rucloud：所有範例應用">
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #1d1d1f; --muted: #6b6b70; --line: #e4e4e0;
+    --accent: #f38020; --accent-soft: #fff1e6; --tag: #f0f0ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --card: #1d1d20; --text: #ececee; --muted: #9a9aa2; --line: #2c2c31;
+      --accent: #ff9a45; --accent-soft: #2e2116; --tag: #26262b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { margin-bottom: 36px; }
+  h1 { font-size: clamp(28px, 5vw, 40px); margin: 0 0 8px; letter-spacing: -0.02em; }
+  h1 span { color: var(--accent); }
+  header p { margin: 0; color: var(--muted); max-width: 680px; }
+  header a { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+  .card {
+    display: flex; flex-direction: column; gap: 10px; padding: 20px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    color: inherit; text-decoration: none; transition: border-color .15s, transform .15s;
+  }
+  .card:hover, .card:focus-visible { border-color: var(--accent); transform: translateY(-2px); outline: none; }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .icon {
+    flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--accent-soft); font-size: 22px;
+  }
+  .name { font-weight: 650; font-size: 18px; }
+  .host { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .desc { margin: 0; color: var(--text); font-size: 15px; flex: 1; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tags span { background: var(--tag); color: var(--muted); font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+  footer { margin-top: 40px; color: var(--muted); font-size: 14px; }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ru<span>cloud</span> 範例</h1>
+    <p>rucloud 是自架的 Cloudflare Workers 平台：Rust 寫基礎建設、Node.js 跑 Worker。下面每個應用都是一個現成的 wrangler 專案，不改程式碼就跑在這台主機上，各自有自己的網域與 HTTPS。
+      原始碼：<a href="https://github.com/ccc-claude-opus/rucloud">github.com/ccc-claude-opus/rucloud</a></p>
+  </header>
+  <div class="grid" id="apps"></div>
+  <footer>每個應用的原始碼在 repo 的 <code>examples/</code>；用 <code>rucloud deploy</code> 就能部署自己的應用。</footer>
+</main>
+<script>
+  const APPS = [
+    ['showcase', '🧪', '所有綁定一次示範：R2、Queues、Cron、Durable Objects、Vectorize、限流、service binding', ['R2', 'Queues', 'Cron', 'DO', 'Vectorize']],
+    ['myshop', '🛒', '個人商店 POS：商品、訂單、登入（HMAC cookie、PBKDF2 密碼）', ['D1', 'Assets']],
+    ['friendbook', '👥', '社群網站：發文、追蹤、熱門排行（KV 快取）', ['D1', 'KV']],
+    ['chat', '💬', 'WebSocket 聊天室：每個房間一個 SQLite 型 Durable Object', ['DO', 'WebSocket']],
+    ['markpedia', '📚', 'Markdown 維基百科：9 學門、36 次分類、111 個條目，中英雙語', ['D1', 'Assets']],
+    ['map', '🗺️', 'Leaflet 釘選地圖：點地圖新增釘選，資料存 D1', ['D1', 'Leaflet']],
+    ['music', '🎹', '音樂學習：樂理教室、聽力訓練、跟彈歌曲、Web MIDI 虛擬鋼琴', ['D1', 'Web MIDI']],
+    ['boardgame', '♟️', '棋藝軒：象棋、西洋棋、五子棋、跳棋、大富翁線上對戰（React 前端）', ['DO', 'WebSocket', 'React']],
+    ['app-builder', '✨', 'AI 網站產生器：一句話產生網站，每個專案自動上線成獨立的應用', ['D1', 'AI', '[dynamic]']],
+    ['hello', '👋', '最小的 Worker：給 showcase 的 service binding 呼叫', ['Worker']],
+  ];
+  // 依目前的網域產生連結：rucloud.cc → myshop.rucloud.cc；portal.localhost:8700 → myshop.localhost:8700
+  const host = location.host.replace(/^portal\./, '');
+  const el = document.getElementById('apps');
+  for (const [name, icon, desc, tags] of APPS) {
+    const a = document.createElement('a');
+    a.className = 'card';
+    a.href = `${location.protocol}//${name}.${host}/`;
+    a.innerHTML = `<div class="head"><div class="icon">${icon}</div><div><div class="name"></div><div class="host"></div></div></div>
+      <p class="desc"></p><div class="tags">${tags.map(() => '<span></span>').join('')}</div>`;
+    a.querySelector('.name').textContent = name;
+    a.querySelector('.host').textContent = `${name}.${host}`;
+    a.querySelector('.desc').textContent = desc;
+    a.querySelectorAll('.tags span').forEach((s, i) => { s.textContent = tags[i]; });
+    el.append(a);
+  }
+</script>
+</body>
+</html>
