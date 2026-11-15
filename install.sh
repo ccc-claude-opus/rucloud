@@ -65,7 +65,9 @@ if [ -n "$BINARY" ]; then
 else
   need curl
   if [ -z "$VERSION" ]; then
-    VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+    # 先整個讀完再找：直接接 grep -m1 會讓 curl 寫到一半被切斷，pipefail 下整個腳本就停了
+    LATEST="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest")" || die "連不到 GitHub API"
+    VERSION="$(printf '%s\n' "$LATEST" | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
     [ -n "$VERSION" ] || die "找不到最新版本（GitHub API 連不到？）"
   fi
   NAME="rucloud-$VERSION-$TARGET"
@@ -107,6 +109,8 @@ else
   mkdir -p /usr/local/lib/nodejs
   rm -rf "/usr/local/lib/nodejs/$NODE_NAME"
   tar -xJf "$TMP/$NODE_NAME.tar.xz" -C /usr/local/lib/nodejs
+  # 壓縮檔裡記錄的擁有者是 1001：交給 root，其他使用者才改不了 node
+  chown -R root:root "/usr/local/lib/nodejs/$NODE_NAME"
   ln -sf "/usr/local/lib/nodejs/$NODE_NAME/bin/node" /usr/local/bin/node
   NODE_BIN=/usr/local/bin/node
   node --version
