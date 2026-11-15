@@ -26,7 +26,9 @@ jobs:
           for f in pebble pebble-challtestsrv; do
             curl -sSfL "https://github.com/letsencrypt/pebble/releases/download/v2.10.3/$f-linux-amd64.tar.gz" | tar -xz
           done
-          find . -type f -name 'pebble*' -perm -u+x -exec mv {} . \;
+          find . -type f \( -name pebble -o -name pebble-challtestsrv \) -exec mv {} . \;
+          chmod +x pebble pebble-challtestsrv
+          ./pebble -version
           echo "PEBBLE_BIN=/tmp/pebble" >> "$GITHUB_ENV"
       # 單元測試 + tests/e2e（Node 的 test runner 跑整合測試）
       - run: cargo test
