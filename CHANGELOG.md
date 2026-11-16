@@ -1,5 +1,10 @@
 # 更新紀錄
 
+## 未發佈
+
+* Worker 程序起不來時，錯誤訊息說出真正的原因：應用資料夾被移動或刪除、找不到 rucloud 的執行環境、找不到 Node.js（`rucloud.toml` 的 `node`），而不是一律「無法啟動 node：No such file or directory」；也寫進應用的 log（管理介面、`rucloud tail` 看得到）。
+* `apps/`：完整的應用（map、myshop、friendbook、app-builder、boardgame、markpedia、music）從 `examples/` 搬過來。
+
 ## 1.7.1 — 修正
 
 * 修正：WebSocket 的對方沒送 close 訊框就斷線（程序結束、網路斷掉、手機休眠）時，Durable Object 收不到 `webSocketClose`，聊天室之類的應用會一直以為那個人還在線上。現在只收到 TCP FIN 也會當作斷線（code 1006），跨程序的轉接也會跟著關閉。

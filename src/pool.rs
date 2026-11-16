@@ -37,6 +37,20 @@ pub struct Pool {
     restarts: std::sync::atomic::AtomicU64,
 }
 
+/// 啟動失敗的原因：spawn 只回「No such file or directory」，不說是哪個檔案不見了。
+/// 最常見的其實不是 Node，而是應用資料夾被移動或刪除了（工作目錄不存在）
+fn spawn_error(spec: &WorkerSpec, e: &std::io::Error) -> String {
+    if !spec.cwd.is_dir() {
+        format!("找不到應用資料夾 {}（被移動或刪除了？改好設定後重開 rucloud）", spec.cwd.display())
+    } else if !spec.host_js.is_file() {
+        format!("找不到 rucloud 的執行環境 {}", spec.host_js.display())
+    } else if e.kind() == std::io::ErrorKind::NotFound {
+        format!("找不到 Node.js：{}（rucloud.toml 的 node 設定）", spec.node)
+    } else {
+        format!("無法啟動 Node.js（{}）：{e}", spec.node)
+    }
+}
+
 impl Pool {
     pub fn start(spec: WorkerSpec, n: usize) -> Arc<Pool> {
         let n = n.max(1);
@@ -144,7 +158,9 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
         let mut child = match child {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!("[{tag}] 無法啟動 {}：{e}", spec.node);
+                let msg = spawn_error(&spec, &e);
+                tracing::error!("[{tag}] {msg}");
+                spec.logs.push("error", &msg, false);
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
