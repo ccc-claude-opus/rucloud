@@ -149,7 +149,7 @@ rucloud reload myshop                     # 改了 .dev.vars / env_file 之後
 
 ### 執行中新增應用（`[dynamic]`）
 
-要「替使用者執行程式碼」（例如 [examples/app-builder](../examples/app-builder) 把 AI 產生的專案跑起來）時，不要在自己的 Worker 裡用 `new Function` 執行：同一個程序裡，別人的程式碼讀得到你的 `env`、改得掉 `crypto` / `fetch`。改成讓每個使用者的專案在 rucloud 裡各自是一個應用：
+要「替使用者執行程式碼」（例如 [apps/app-builder](../apps/app-builder) 把 AI 產生的專案跑起來）時，不要在自己的 Worker 裡用 `new Function` 執行：同一個程序裡，別人的程式碼讀得到你的 `env`、改得掉 `crypto` / `fetch`。改成讓每個使用者的專案在 rucloud 裡各自是一個應用：
 
 ```toml
 [edge]

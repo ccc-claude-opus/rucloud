@@ -120,7 +120,9 @@ flowchart LR
 
 或一次全部跑起來：`docker compose up --build`，再開 <http://localhost:8701>～<http://localhost:8704>。
 
-## 範例
+## 範例與應用
+
+`examples/` 是示範 rucloud 功能的小範例；`apps/` 是完整、可以直接拿來用的應用。兩者都是標準的 wrangler 專案，都寫在 `examples/rucloud.toml` 裡，一個指令就能全部跑起來（線上版：<https://rucloud.cc/>）。
 
 | 範例 | 內容 | `rucloud serve examples/rucloud.toml` 後的網址 |
 |---|---|---|
@@ -128,13 +130,16 @@ flowchart LR
 | [examples/showcase](examples/showcase) | 所有綁定一次示範（R2、Queues、Cron、DO、Vectorize、限流、service binding） | <http://localhost:8710> |
 | [examples/hello](examples/hello) | 最小 Worker，給 showcase 的 service binding 呼叫 | <http://hello.localhost:8700> |
 | [examples/chat](examples/chat) | WebSocket 聊天室：每個房間一個 SQLite 型 Durable Object（hibernation API + `ctx.storage.sql`） | <http://localhost:8713> |
-| [examples/myshop](examples/myshop) | 個人商店 POS：D1、HMAC cookie、PBKDF2（取自 test-apps） | <http://localhost:8711> |
-| [examples/friendbook](examples/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
-| [examples/markpedia](examples/markpedia) | Markdown 維基百科：D1 + Assets，三層分類樹（9 學門 / 36 次分類 / 111 條目）（取自 test-apps） | <http://localhost:8714> |
-| [examples/map](examples/map) | [Leaflet](https://leafletjs.com/) 釘選地圖：點地圖新增釘選，資料存 D1 | <http://localhost:8715> |
-| [examples/music](examples/music) | 音樂學習：樂理教室、聽力訓練、跟彈歌曲、Web MIDI 虛擬鋼琴，成績存 D1 | <http://localhost:8716> |
-| [examples/app-builder](examples/app-builder) | AI 網站產生器（Lovable 式）：帳號、AI 對話串流，可產出靜態網頁或全端 Worker + D1 專案並打包下載；每個產生的專案在執行中新增成獨立的應用（`[dynamic]`，rucloud 專用） | <http://localhost:8717> |
-| [examples/boardgame](examples/boardgame) | 棋藝軒：象棋、西洋棋、五子棋、跳棋、大富翁線上對戰（Durable Object + WebSocket hibernation，React 前端） | <http://localhost:8718> |
+
+| 應用 | 內容 | 網址 |
+|---|---|---|
+| [apps/myshop](apps/myshop) | 個人商店 POS：D1、HMAC cookie、PBKDF2（取自 test-apps） | <http://localhost:8711> |
+| [apps/friendbook](apps/friendbook) | 社群網站：D1 + KV 快取與熱門排行（取自 test-apps） | <http://localhost:8712> |
+| [apps/markpedia](apps/markpedia) | Markdown 維基百科：D1 + Assets，三層分類樹（9 學門 / 36 次分類 / 111 條目）（取自 test-apps） | <http://localhost:8714> |
+| [apps/map](apps/map) | [Leaflet](https://leafletjs.com/) 釘選地圖：點地圖新增釘選，資料存 D1 | <http://localhost:8715> |
+| [apps/music](apps/music) | 音樂學習：樂理教室、聽力訓練、跟彈歌曲、Web MIDI 虛擬鋼琴，成績存 D1 | <http://localhost:8716> |
+| [apps/app-builder](apps/app-builder) | AI 網站產生器（Lovable 式）：帳號、AI 對話串流，可產出靜態網頁或全端 Worker + D1 專案並打包下載；每個產生的專案在執行中新增成獨立的應用（`[dynamic]`，rucloud 專用） | <http://localhost:8717> |
+| [apps/boardgame](apps/boardgame) | 棋藝軒：象棋、西洋棋、五子棋、跳棋、大富翁線上對戰（Durable Object + WebSocket hibernation，React 前端） | <http://localhost:8718> |
 
 ```bash
 rucloud serve examples/rucloud.toml

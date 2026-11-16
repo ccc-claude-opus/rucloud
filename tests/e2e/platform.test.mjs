@@ -25,14 +25,14 @@ instances = 3
 [[app]]
 path = "${ROOT}/examples/hello"
 [[app]]
-path = "${ROOT}/examples/myshop"
+path = "${ROOT}/apps/myshop"
 port = ${P.myshop}
-env_file = "${ROOT}/examples/myshop/.dev.vars.example"
+env_file = "${ROOT}/apps/myshop/.dev.vars.example"
 d1_init = { DB = "schema.sql" }
 [[app]]
-path = "${ROOT}/examples/friendbook"
+path = "${ROOT}/apps/friendbook"
 port = ${P.friendbook}
-env_file = "${ROOT}/examples/friendbook/.dev.vars.example"
+env_file = "${ROOT}/apps/friendbook/.dev.vars.example"
 d1_init = { DB = "schema.sql" }
 [[app]]
 path = "${ROOT}/examples/chat"

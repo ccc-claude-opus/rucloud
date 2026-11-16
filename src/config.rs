@@ -483,7 +483,7 @@ pub struct DomainCfg {
     pub root: Option<String>,
 }
 
-/// `[dynamic]`：執行中新增的應用。用在「替使用者執行程式碼」的服務（例如 examples/app-builder），
+/// `[dynamic]`：執行中新增的應用。用在「替使用者執行程式碼」的服務（例如 apps/app-builder），
 /// 每個應用是自己的 Worker 程序、自己的沙箱與資料，只能用不會碰到其他應用的綁定。
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]

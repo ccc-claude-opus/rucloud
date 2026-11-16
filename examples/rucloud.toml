@@ -29,15 +29,15 @@ path = "hello"
 # 從 cloudflare/test-apps 複製過來的完整應用（D1 + KV + HMAC cookie）。
 # 示範用的密鑰在 .dev.vars.example；正式使用請改成自己的 env_file
 [[app]]
-path = "myshop"
+path = "../apps/myshop"
 port = 8711
-env_file = "myshop/.dev.vars.example"
+env_file = "../apps/myshop/.dev.vars.example"
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "friendbook"
+path = "../apps/friendbook"
 port = 8712
-env_file = "friendbook/.dev.vars.example"
+env_file = "../apps/friendbook/.dev.vars.example"
 d1_init = { DB = "schema.sql" }
 
 # WebSocket 聊天室（Durable Object + hibernation API）
@@ -48,29 +48,29 @@ instances = 2
 
 # 維基百科式的 Markdown 知識庫（D1 + Assets）
 [[app]]
-path = "markpedia"
+path = "../apps/markpedia"
 port = 8714
 d1_init = { DB = "schema.sql" }
 
 # Leaflet 釘選地圖（D1 + Assets）
 [[app]]
-path = "map"
+path = "../apps/map"
 port = 8715
 d1_init = { DB = "schema.sql" }
 
 # 音樂學習：樂理、聽力訓練、跟彈、Web MIDI（D1 + Assets）
 [[app]]
-path = "music"
+path = "../apps/music"
 port = 8716
 d1_init = { DB = "schema.sql" }
 
 # AI 網站產生器（Lovable 式：帳號 + AI 對話 + 產出靜態網站；金鑰在 .dev.vars 或使用者自填）
 [[app]]
-path = "app-builder"
+path = "../apps/app-builder"
 port = 8717
 d1_init = { DB = "schema.sql" }
 
 # 棋藝軒：棋類桌遊對戰平台（Durable Object + WebSocket hibernation，React 前端）
 [[app]]
-path = "boardgame"
+path = "../apps/boardgame"
 port = 8718

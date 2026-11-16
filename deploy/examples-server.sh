@@ -99,6 +99,7 @@ CFG="$HOME_DIR/rucloud.toml"
 if [ ! -f "$CFG" ]; then
   say "產生 ~/rucloud.toml"
   E="$HOME_DIR/rucloud/examples"
+  A="$HOME_DIR/rucloud/apps"
   cat > "$CFG" <<EOF
 # rucloud：examples/ 的應用（由 deploy/examples-server.sh 產生，之後可以自己改）
 # 改完：sudo systemctl restart rucloud
@@ -143,13 +144,13 @@ port = 8710
 path = "$E/hello"
 
 [[app]]
-path = "$E/myshop"
+path = "$A/myshop"
 port = 8711
 env_file = "$HOME_DIR/secrets/myshop.env"
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "$E/friendbook"
+path = "$A/friendbook"
 port = 8712
 env_file = "$HOME_DIR/secrets/friendbook.env"
 d1_init = { DB = "schema.sql" }
@@ -159,28 +160,28 @@ path = "$E/chat"
 port = 8713
 
 [[app]]
-path = "$E/markpedia"
+path = "$A/markpedia"
 port = 8714
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "$E/map"
+path = "$A/map"
 port = 8715
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "$E/music"
+path = "$A/music"
 port = 8716
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "$E/app-builder"
+path = "$A/app-builder"
 port = 8717
 env_file = "$HOME_DIR/secrets/app-builder.env"
 d1_init = { DB = "schema.sql" }
 
 [[app]]
-path = "$E/boardgame"
+path = "$A/boardgame"
 port = 8718
 EOF
   chown "$SVC:$SVC" "$CFG"

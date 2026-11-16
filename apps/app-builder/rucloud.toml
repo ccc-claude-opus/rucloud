@@ -1,4 +1,4 @@
-# 單獨跑 app-builder：rucloud serve examples/app-builder/rucloud.toml
+# 單獨跑 app-builder：rucloud serve apps/app-builder/rucloud.toml
 #   app-builder：http://localhost:8717
 #   產生的 app ：http://gen-<專案id>.localhost:8700（每個專案是一個獨立的應用）
 state_dir = "../../.rucloud"

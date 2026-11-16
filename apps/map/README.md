@@ -5,7 +5,7 @@
 ## 跑起來
 
 ```bash
-rucloud dev examples/map --d1-init DB=schema.sql   # http://localhost:8787
+rucloud dev apps/map --d1-init DB=schema.sql   # http://localhost:8787
 ```
 
 或跟其他範例一起跑：

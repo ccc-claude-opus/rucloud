@@ -1,5 +1,5 @@
 // app-builder：AI 網站產生器（rucloud 專用；Cloudflare 免費方案 10ms CPU 撐不起長串流）
-// 產生的每個專案部署成 rucloud 的獨立應用（rucloud.toml 的 [dynamic]）：rucloud serve examples/app-builder/rucloud.toml
+// 產生的每個專案部署成 rucloud 的獨立應用（rucloud.toml 的 [dynamic]）：rucloud serve apps/app-builder/rucloud.toml
 {
   "name": "app-builder",
   "main": "src/worker.js",

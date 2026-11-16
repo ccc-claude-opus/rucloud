@@ -801,7 +801,7 @@ async function makeZip(files) {
 
 const READMD = (name) => `# ${name}
 
-由 AppForge（rucloud examples/app-builder）的 AI 產生的網頁應用，整個程式都在 index.html 裡。
+由 AppForge（rucloud apps/app-builder）的 AI 產生的網頁應用，整個程式都在 index.html 裡。
 
 ## 使用
 直接用瀏覽器打開 index.html 即可。
@@ -816,7 +816,7 @@ const READMD = (name) => `# ${name}
 
 const READMD_FULL = (name) => `# ${name}（Cloudflare Workers 全端專案）
 
-由 AppForge（rucloud examples/app-builder）的 AI 產生的完整專案：Worker API + D1 資料庫 + 前端。
+由 AppForge（rucloud apps/app-builder）的 AI 產生的完整專案：Worker API + D1 資料庫 + 前端。
 
 ## 在 rucloud 執行
     rucloud dev 本資料夾 --d1-init DB=schema.sql

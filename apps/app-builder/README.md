@@ -5,8 +5,8 @@
 ## 跑起來
 
 ```bash
-cp examples/app-builder/.dev.vars.example examples/app-builder/.dev.vars   # 填入 AUTH_SECRET（與選填的 AI key）
-rucloud serve examples/app-builder/rucloud.toml                            # http://localhost:8717
+cp apps/app-builder/.dev.vars.example apps/app-builder/.dev.vars   # 填入 AUTH_SECRET（與選填的 AI key）
+rucloud serve apps/app-builder/rucloud.toml                            # http://localhost:8717
 ```
 
 或跟其他範例一起跑：`rucloud serve examples/rucloud.toml`（<http://localhost:8717>）。

@@ -14,7 +14,7 @@
 public/ 已含 build 好的前端，直接跑即可：
 
 ```bash
-rucloud dev examples/boardgame    # http://localhost:8787
+rucloud dev apps/boardgame    # http://localhost:8787
 ```
 
 或跟其他範例一起跑：
@@ -26,7 +26,7 @@ rucloud serve examples/rucloud.toml   # http://localhost:8718
 要改前端時再重新 build：
 
 ```bash
-cd examples/boardgame
+cd apps/boardgame
 npm install
 npm run build   # vite build → public/
 npm run check   # tsc --noEmit
