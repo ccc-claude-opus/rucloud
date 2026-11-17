@@ -14,6 +14,21 @@ CI order (`.github/workflows/ci.yml`): `cargo fmt --check` → `cargo clippy --a
 - Run a local server: `./run.sh` = `cargo run --release -- serve examples/rucloud.toml`.
 - `apps/` contains real sample worker apps (wrangler-style projects), `examples/` has serve configs — useful for manual testing.
 
+## Updating the live site (rucloud.cc on Linode)
+
+The production server is a Linode running rucloud as the passwordless `service` account (SSH key auth only — the private key is in the user's `~/.ssh/`, **never commit or print it**). To ship changes to `sites/`:
+
+1. Commit + push to GitHub `main` (local SSH key has no GitHub access; push via `gh` token over HTTPS: `git -c credential.helper='!f() { echo username=ccckmit; echo password=$(gh auth token); }; f' push https://github.com/ccc-claude-opus/rucloud.git <branch>:main`).
+2. Pull and deploy on the server (admin API is localhost-only; token in `~/state/admin-token`):
+
+   ```bash
+   ssh service@139.162.90.34
+   cd ~/rucloud && git pull --ff-only
+   rucloud deploy sites/ccc --admin http://127.0.0.1:8799 --token "$(cat ~/state/admin-token)" -m "更新"
+   ```
+
+Deployed apps are copied into the server's state dir — re-deploy after editing `sites/`. Server logs: `journalctl -u rucloud -f`; restart: `sudo systemctl restart rucloud`.
+
 ## Conventions
 
 - rustfmt `max_width = 140`.
