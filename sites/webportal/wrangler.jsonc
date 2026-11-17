@@ -1,0 +1,7 @@
+// 類似 Yahoo 的入口網站（只有靜態檔案）：https://rucloud.cc/
+// 部署：rucloud deploy sites/webportal --admin <管理 API>（沒有這個應用就自動新增）
+{
+  "name": "webportal",
+  "compatibility_date": "2025-11-16",
+  "assets": { "directory": "./public" }
+}

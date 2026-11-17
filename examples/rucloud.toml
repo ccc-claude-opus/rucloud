@@ -26,6 +26,14 @@ port = 8710
 [[app]]
 path = "hello"
 
+# 網頁導航網站（只有靜態檔案）：本機 http://ccc.localhost:8700
+[[app]]
+path = "../sites/ccc"
+
+# 個人介紹頁：本機 http://webportal.localhost:8700
+[[app]]
+path = "../sites/webportal"
+
 # 從 cloudflare/test-apps 複製過來的完整應用（D1 + KV + HMAC cookie）。
 # 示範用的密鑰在 .dev.vars.example；正式使用請改成自己的 env_file
 [[app]]

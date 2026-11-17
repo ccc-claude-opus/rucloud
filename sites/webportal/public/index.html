@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>入口網站 | Portals</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#">
+      <span class="brand-mark">P</span>
+      <span class="brand-text">入口網站</span>
+    </a>
+
+    <form class="searchbar" id="searchForm" role="search" autocomplete="off">
+      <input type="text" id="q" placeholder="搜尋站名、網址或分類…" aria-label="搜尋">
+      <button type="submit" class="btn-search" title="搜尋">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+          <line x1="16.5" y1="16.5" x2="21" y2="21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </form>
+
+    <div class="seg" id="seg" role="tablist" aria-label="搜尋模式">
+      <button class="seg-btn active" data-mode="site" role="tab" aria-selected="true">站內</button>
+      <button class="seg-btn" data-mode="google" role="tab" aria-selected="false">Google</button>
+    </div>
+
+    <span class="count" id="count"></span>
+
+    <button id="themeToggle" class="icon-btn" title="切換深色/淺色" aria-label="切換主題">
+      <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <circle cx="12" cy="12" r="4.5" fill="currentColor"/>
+        <g stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="12" y1="1.5" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="22.5"/>
+          <line x1="1.5" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="22.5" y2="12"/>
+          <line x1="4.2" y1="4.2" x2="6" y2="6"/><line x1="18" y1="18" x2="19.8" y2="19.8"/>
+          <line x1="4.2" y1="19.8" x2="6" y2="18"/><line x1="18" y1="6" x2="19.8" y2="4.2"/>
+        </g>
+      </svg>
+      <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="currentColor"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<nav class="crumb" id="crumb" aria-label="路徑" hidden></nav>
+
+<main class="content" id="main"></main>
+
+<p class="empty" id="empty" hidden>找不到符合的網站，試試其他關鍵字。</p>
+
+<footer class="footer">入口網站 · 三層分類索引 · 連結以新分頁開啟</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

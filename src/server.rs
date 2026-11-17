@@ -166,6 +166,16 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     }
     for (slot, entry) in &apps {
         let app = slot.get();
+        // edge 依 Host 分派：每個應用都能用 <名稱>.localhost（有 [domain] 時是 <名稱>.<base>）進來
+        let host = match &cfg.domain {
+            Some(d) => format!("{}.{}", slot.name, d.base),
+            None => format!("{}.localhost", slot.name),
+        };
+        let edge_url = cfg
+            .edge
+            .as_ref()
+            .filter(|_| cfg.tls.as_ref().is_none_or(|t| !t.redirect_http))
+            .map(|e| format!("http://{host}:{}", e.port));
         if let Some(port) = entry.port {
             let addr: SocketAddr = format!("{}:{port}", cfg.bind).parse().context("bind 位址不對")?;
             let listener = tokio::net::TcpListener::bind(addr)
@@ -181,7 +191,13 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             } else {
                 cfg.bind.clone()
             };
-            tracing::info!("[{}] http://{shown}:{port}  ({})", slot.name, app.dir.display());
+            match &edge_url {
+                Some(u) => tracing::info!("[{}] http://{shown}:{port}、{u}  ({})", slot.name, app.dir.display()),
+                None => tracing::info!("[{}] http://{shown}:{port}  ({})", slot.name, app.dir.display()),
+            }
+        } else if let Some(u) = &edge_url {
+            // 沒有 port 的應用只從 edge（依 Host 分派）進來
+            tracing::info!("[{}] edge：{u}  ({})", slot.name, app.dir.display());
         }
         crate::deploy::restart_background(slot, &app, &queues);
         tokio::spawn(crate::workflows::run_loop(slot.clone(), slot.shared.workflows.clone()));

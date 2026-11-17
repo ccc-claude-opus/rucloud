@@ -148,6 +148,23 @@ curl localhost:8710/api/do        # Durable Object 計數器
 
 myshop 與 friendbook 示範用的 `AUTH_SECRET` 放在 `.dev.vars.example`，自己部署時請換掉。
 
+## sites/
+
+[sites/](sites) 放 rucloud.cc 上實際營運的網站（每個都是只有靜態檔案的 wrangler 專案）：
+
+| 網站 | 內容 | 線上版 |
+|---|---|---|
+| [sites/ccc](sites/ccc) | 陳鍾誠的個人介紹頁 | <https://ccc.rucloud.cc/> |
+| [sites/webportal](sites/webportal) | 入口網站（網頁導航） | <https://rucloud.cc/> |
+
+它們沒有寫在 `examples/rucloud.toml` 裡，而是用 `rucloud deploy` 佈署到執行中的伺服器（部署後複製到 state 目錄，改了檔案要重新佈署）：
+
+```bash
+rucloud deploy sites/ccc --admin <管理 API> -m "更新"   # 沒有這個應用就自動新增
+```
+
+想在本機一起跑，可以在 `examples/rucloud.toml` 加上 `[[app]] path = "../sites/ccc"`，重啟後從 <http://ccc.localhost:8700> 開啟。
+
 ## 開發
 
 ```bash
