@@ -101,6 +101,25 @@ pub fn app_name(entry: &AppEntry) -> Result<String> {
         .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned()))
 }
 
+/// 這個 Node 的權限模型是否也管網路（Node 25 起有 --allow-net）
+fn node_has_net_permission(node: &str) -> bool {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(&v) = cache.lock().unwrap().get(node) {
+        return v;
+    }
+    let major = std::process::Command::new(node)
+        .arg("--version")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|v| v.trim().trim_start_matches('v').split('.').next()?.parse::<u32>().ok())
+        .unwrap_or(0);
+    let has = major >= 25;
+    cache.lock().unwrap().insert(node.to_string(), has);
+    has
+}
+
 impl Slot {
     /// 第一次載入：code_dir 是要跑的程式碼（部署過的版本，或設定檔的 path）
     pub fn create(entry: &AppEntry, ctx: &Ctx, code_dir: &Path) -> Result<Arc<Slot>> {
@@ -132,7 +151,12 @@ impl App {
         let dir = code_dir
             .canonicalize()
             .with_context(|| format!("找不到應用資料夾 {}", code_dir.display()))?;
-        let cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
+        let mut cfg = config::load_wrangler(&dir, entry.env.as_deref())?;
+        // 安裝的應用：使用者給的權限（service binding 與對外連線）
+        let grants = entry.installed.then(|| crate::deploy::load_grants(&ctx.state_root, name));
+        if let Some(g) = &grants {
+            cfg.services.extend(g.services.iter().cloned());
+        }
         for (key, why) in config::unsupported_keys(&dir, entry.env.as_deref()) {
             tracing::warn!("[{name}] wrangler 設定的 {key}：{why}");
         }
@@ -192,6 +216,8 @@ impl App {
             "vectorize": cfg.vectorize.iter().map(|v| &v.binding).collect::<Vec<_>>(),
             "ratelimits": cfg.ratelimits.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "services": cfg.services.iter().map(|s| &s.binding).collect::<Vec<_>>(),
+            "installed": entry.installed,
+            "network": grants.as_ref().is_none_or(|g| g.network),
             "workflows": cfg.workflows.iter().map(|w| json!({ "binding": w.binding, "name": w.name })).collect::<Vec<_>>(),
             "hyperdrive": cfg.hyperdrive.iter().map(|h| {
                 let var = format!("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_{}", h.binding);
@@ -215,6 +241,10 @@ impl App {
             // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
             let runtime_dir = ctx.host_js.parent().unwrap_or(&ctx.host_js);
             node_args.push("--permission".to_string());
+            // Node 25 起權限模型也管網路；Worker 要聽埠、連 rucloud 的綁定 API（對外連線另在執行環境裡管）
+            if node_has_net_permission(&ctx.node) {
+                node_args.push("--allow-net".to_string());
+            }
             for p in [dir.as_path(), runtime_dir]
                 .into_iter()
                 .chain(entry.allow_read.iter().map(|p| p.as_path()))

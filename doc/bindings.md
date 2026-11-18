@@ -257,6 +257,8 @@ curl -X POST localhost:8799/analytics/sql -d "SELECT …"     # 管理埠
 
 RPC：`env.AUTH.verify(token)` 呼叫目標應用 default export（`WorkerEntrypoint` 類別或物件）的方法；`{ "binding": "ADMIN", "service": "auth-worker", "entrypoint": "Admin" }` 呼叫具名 entrypoint。參數與回傳值用 rucloud 的結構化序列化（支援 Date、Map、Set、位元組、BigInt），不支援傳函式或 stub。`fetch()` 一律進 default export。
 
+`props`（和 Cloudflare 一樣）：`{ "binding": "AUTH", "service": "auth-worker", "props": { "tenant": "a" } }`，目標應用在 `fetch(request, env, ctx)`（與 RPC 的 `WorkerEntrypoint`）的 `ctx.props` 讀到它。props 由設定決定，呼叫端改不了；直接從外面連進來的請求 `ctx.props` 是 `{}`。帶 props 的呼叫不經過閘道快取。
+
 ## Workers AI
 
 `env.AI.run(model, inputs)` 轉給 OpenAI 相容的後端：

@@ -71,8 +71,8 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     let mut cfg = cfg;
     let mut granted = std::collections::BTreeMap::new();
     // [admin] host（管理 API 透過 HTTPS 對外）也一定要有 token
-    if cfg.dynamic.is_some() || cfg.admin.as_ref().is_some_and(|a| a.host.is_some()) {
-        let admin = cfg.admin.as_mut().context("[dynamic] 的 API 在管理埠上，需要 [admin]")?;
+    if cfg.dynamic.is_some() || cfg.install.is_some() || cfg.admin.as_ref().is_some_and(|a| a.host.is_some()) {
+        let admin = cfg.admin.as_mut().context("[dynamic]、[install] 的 API 在管理埠上，需要 [admin]")?;
         if admin.token.is_none() {
             let path = state_root.join("admin-token");
             let token = match std::fs::read_to_string(&path) {
@@ -101,6 +101,16 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
                     ("RUCLOUD_DYNAMIC_TOKEN".to_string(), token.clone()),
                 ]),
             );
+        }
+    }
+    if let Some(i) = &mut cfg.install {
+        let admin = cfg.admin.as_ref().context("[install] 的 API 在管理埠上，需要 [admin]")?;
+        let token = i.token.get_or_insert_with(|| format!("{:032x}", rand::random::<u128>())).clone();
+        let url = format!("http://127.0.0.1:{}", admin.port);
+        for name in &i.grant {
+            let env: &mut std::collections::BTreeMap<String, String> = granted.entry(name.clone()).or_default();
+            env.insert("RUCLOUD_ADMIN_URL".to_string(), url.clone());
+            env.insert("RUCLOUD_INSTALL_TOKEN".to_string(), token.clone());
         }
     }
     let cfg = cfg;
@@ -209,6 +219,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         queues: queues.clone(),
         grace: Duration::from_secs(cfg.shutdown_timeout),
         dynamic: cfg.dynamic.clone(),
+        install: cfg.install.clone(),
         dynamic_lock: Default::default(),
     });
     // 上次執行中新增的應用（部署時自動新增的、[dynamic] 的）
@@ -223,6 +234,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             draining: draining.clone(),
             dynamic_token: cfg.dynamic.as_ref().and_then(|d| d.token.clone()),
             dynamic_prefix: cfg.dynamic.as_ref().map(|d| d.prefix.clone()),
+            install_token: cfg.install.as_ref().and_then(|i| i.token.clone()),
             deployer: deployer.clone(),
             analytics: analytics.clone(),
         });

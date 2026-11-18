@@ -585,11 +585,20 @@ async fn service(State(hub): S, Path((app, binding)): Path<(String, String)>, mu
         None => ("localhost".into(), "/".into()),
     };
     *req.uri_mut() = pq.parse().map_err(|e| anyhow!("{e}"))?;
+    let props = target_props(&app.cfg.services, &binding);
     let h = req.headers_mut();
     h.remove("x-rucloud-token");
     h.remove("x-rucloud-svc-url");
     h.insert(header::HOST, HeaderValue::from_str(&host).map_err(|e| anyhow!(e))?);
+    if let Some(p) = props {
+        req.extensions_mut().insert(crate::gateway::SvcProps(p));
+    }
     Ok(crate::gateway::handle(&target, req, ([127, 0, 0, 1], 0).into()).await)
+}
+
+/// 綁定設定的 props（JSON 字串），給目標應用的 ctx.props
+fn target_props(services: &[crate::config::ServiceCfg], binding: &str) -> Option<String> {
+    services.iter().find(|s| s.binding == binding)?.props.as_ref().map(|p| p.to_string())
 }
 
 // ---------- Workflows ----------
@@ -623,6 +632,9 @@ async fn service_rpc(State(hub): S, Path((app, binding)): Path<(String, String)>
         .body(body);
     if let Some(ep) = &svc.entrypoint {
         rb = rb.header("x-rucloud-entrypoint", ep);
+    }
+    if let Some(p) = &svc.props {
+        rb = rb.header("x-rucloud-props", p.to_string());
     }
     let res = rb.send().await.map_err(|e| anyhow!(e))?;
     let status = StatusCode::from_u16(res.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);

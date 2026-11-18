@@ -12,6 +12,8 @@ import net from 'node:net';
 import { Readable } from 'node:stream';
 import { createHash, randomBytes } from 'node:crypto';
 import { registerHooks } from 'node:module';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { HTMLRewriter } from './html-rewriter.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -26,6 +28,37 @@ const B = spec.bindingsUrl;
 const AUTH = { 'x-rucloud-token': spec.token };
 const nativeFetch = globalThis.fetch;
 const enc = encodeURIComponent;
+
+// 安裝的應用（[install]）：沒有「網路」權限時 Worker 的程式碼不能連到外部；有的話只能連網際網路上的位址
+//（本機、區網、連結本地位址都擋下，免得繞過權限直接呼叫這台機器上的其他應用）。
+// cloudflare:sockets 與 Node 的網路模組不開放；rucloud 自己的綁定不受影響
+const INSTALLED = spec.installed === true;
+const NO_NETWORK = INSTALLED && spec.network === false;
+const NO_NETWORK_MSG = '這個應用沒有連線到外部網路的權限';
+const NET_MODULES = /^(node:)?(net|tls|http|https|http2|dgram|dns|dns\/promises|undici)$/;
+const RUNTIME_DIR = new URL('./', import.meta.url).href;
+
+// 網際網路上的位址（不是本機、私有網路、CGNAT、連結本地、多播、保留的）
+function isPublicAddress(addr) {
+  if (isIP(addr) === 4) {
+    const [a, b] = addr.split('.').map(Number);
+    return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b < 128) || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b < 32) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)));
+  }
+  const v6 = addr.toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
+  if (mapped) return isPublicAddress(mapped[1]);
+  return !(v6 === '::' || v6 === '::1' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6) || /^ff/.test(v6));
+}
+
+async function checkPublic(url) {
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) throw new TypeError(`${host}：安裝的應用只能連到網際網路上的位址`);
+  const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
+  for (const { address } of addrs) {
+    if (!isPublicAddress(address)) throw new TypeError(`${host}（${address}）：安裝的應用只能連到網際網路上的位址`);
+  }
+}
 
 // 模組規則（和 wrangler 的 rules 相同）：import 非 JS 檔時的處理方式
 const DEFAULT_RULES = [
@@ -49,6 +82,14 @@ const EXTENSIONS = ['.ts', '.js', '.mjs', '.mts', '.tsx', '.jsx', '/index.ts', '
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (INSTALLED && !(context.parentURL || '').startsWith(RUNTIME_DIR)) {
+      const why = NO_NETWORK ? NO_NETWORK_MSG : '安裝的應用請用 fetch 或 WebSocket 連線';
+      if (specifier === 'cloudflare:sockets') {
+        const source = `export function connect() { throw new TypeError(${JSON.stringify(why)}); }`;
+        return { url: `data:text/javascript,${encodeURIComponent(source)}`, shortCircuit: true };
+      }
+      if (NET_MODULES.test(specifier)) throw new Error(`${specifier}：${why}`);
+    }
     if (specifier === 'cloudflare:workers' || specifier === 'cloudflare:workflows') {
       return { url: new URL('./cloudflare-workers.mjs', import.meta.url).href, shortCircuit: true };
     }
@@ -1402,6 +1443,50 @@ globalThis.fetch = async function fetch(input, init) {
   });
 };
 
+if (NO_NETWORK) {
+  globalThis.fetch = async function fetch() { throw new TypeError(NO_NETWORK_MSG); };
+  globalThis.WebSocket = class WebSocket { constructor() { throw new TypeError(NO_NETWORK_MSG); } };
+} else if (INSTALLED) {
+  const allowed = globalThis.fetch;
+  globalThis.fetch = async function fetch(input, init) {
+    // 不用 new Request(input, init)：串流的 body 會被鎖住
+    await checkPublic(input instanceof Request ? input.url : String(input instanceof URL ? input.href : input));
+    return allowed(input, init);
+  };
+  // 建構子是同步的：位址檢查不過時改成連線失敗（error、close 事件）
+  const NativeWebSocket = globalThis.WebSocket;
+  globalThis.WebSocket = class WebSocket extends EventTarget {
+    constructor(url, protocols) {
+      super();
+      Object.assign(this, { url: String(url), readyState: 0, protocol: '', binaryType: 'blob', onopen: null, onmessage: null, onerror: null, onclose: null });
+      this._ready = checkPublic(String(url).replace(/^ws/, 'http')).then(() => {
+        const ws = (this._ws = new NativeWebSocket(url, protocols));
+        ws.binaryType = this.binaryType;
+        for (const t of ['open', 'message', 'error', 'close']) {
+          ws.addEventListener(t, (e) => {
+            this.readyState = ws.readyState;
+            this.protocol = ws.protocol;
+            const ev = new e.constructor(t, e);
+            this[`on${t}`]?.(ev);
+            this.dispatchEvent(ev);
+          });
+        }
+      }, (e) => {
+        this.readyState = 3;
+        const err = new Event('error');
+        err.error = e;
+        this.onerror?.(err);
+        this.dispatchEvent(err);
+        const close = new CloseEvent('close', { code: 1006, reason: e.message, wasClean: false });
+        this.onclose?.(close);
+        this.dispatchEvent(close);
+      });
+    }
+    send(data) { if (!this._ws) throw new DOMException('Still in CONNECTING state.', 'InvalidStateError'); this._ws.send(data); }
+    close(code, reason) { this._ready.then(() => this._ws?.close(code, reason)); }
+  };
+}
+
 const listeners = { fetch: [], scheduled: [], queue: [] };
 globalThis.addEventListener = (type, fn) => listeners[type]?.push(fn);
 
@@ -1418,12 +1503,13 @@ try {
   process.exit(1);
 }
 
-function makeCtx() {
+// props：service binding 設定的 props（rucloud 放在 x-rucloud-props 標頭，外來的請求不會有）
+function makeCtx(props = {}) {
   const pending = [];
   return {
     waitUntil(p) { pending.push(Promise.resolve(p).catch((e) => console.error('waitUntil:', e))); },
     passThroughOnException() {},
-    props: {},
+    props,
     _drain() { return Promise.all(pending); },
   };
 }
@@ -1512,9 +1598,13 @@ async function readBody(req) {
 
 const fetchHandler = handler('fetch');
 
+function propsOf(req) {
+  try { return JSON.parse(req.headers['x-rucloud-props'] || '{}') ?? {}; } catch { return {}; }
+}
+
 async function handleFetch(req, res) {
   const request = toRequest(req);
-  const ctx = makeCtx();
+  const ctx = makeCtx(propsOf(req));
   let response;
   try {
     if (!fetchHandler) throw new Error('Worker 沒有 fetch() handler');
@@ -1546,7 +1636,7 @@ async function handleInternal(kind, req, res) {
       const ep = epName ? workerModule[epName] : entry;
       if (!ep) throw new Error(`沒有 export ${epName}`);
       if (method === 'constructor' || String(method).startsWith('_')) throw new Error(`不能呼叫 ${method}`);
-      const ctx = makeCtx();
+      const ctx = makeCtx(propsOf(req));
       const target = typeof ep === 'function' ? new ep(ctx, env) : ep;
       const fn = target[method];
       if (typeof fn !== 'function') throw new Error(`${epName || 'default'} 沒有方法 ${method}()`);

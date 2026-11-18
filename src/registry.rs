@@ -18,6 +18,15 @@ pub enum Kind {
     Managed,
     /// [dynamic]：替使用者執行的程式碼（不可信，綁定有限制）
     Dynamic,
+    /// [install]：安裝的應用（不可信，綁定有限制，權限由安裝程式給）
+    Installed,
+}
+
+impl Kind {
+    /// 不可信的程式碼：只能用不會碰到其他應用的綁定，不採用 wrangler 的 routes
+    pub fn restricted(self) -> bool {
+        matches!(self, Kind::Dynamic | Kind::Installed)
+    }
 }
 
 #[derive(Default)]
@@ -28,6 +37,7 @@ pub struct Registry {
     /// 執行中新增的應用名稱
     dynamic: RwLock<BTreeSet<String>>,
     managed: RwLock<BTreeSet<String>>,
+    installed: RwLock<BTreeSet<String>>,
     /// 保留的網域（例如管理介面的 [admin] host）：應用不能用，但會申請憑證
     reserved: RwLock<BTreeSet<String>>,
     pub domain: Option<DomainCfg>,
@@ -65,11 +75,12 @@ impl Registry {
     }
 
     pub fn insert(&self, slot: Arc<Slot>, kind: Kind) -> Result<()> {
-        let hosts = self.hosts_for(&slot, kind == Kind::Dynamic);
+        let hosts = self.hosts_for(&slot, kind.restricted());
         self.check_hosts(&slot.name, &hosts)?;
         match kind {
             Kind::Dynamic => self.dynamic.write().unwrap().insert(slot.name.clone()),
             Kind::Managed => self.managed.write().unwrap().insert(slot.name.clone()),
+            Kind::Installed => self.installed.write().unwrap().insert(slot.name.clone()),
             Kind::Config => true,
         };
         self.apps.write().unwrap().insert(slot.name.clone(), slot.clone());
@@ -96,7 +107,7 @@ impl Registry {
 
     /// 換版後重新計算網域（routes 可能改了）
     pub fn refresh_hosts(&self, slot: &Arc<Slot>) -> Result<()> {
-        let hosts = self.hosts_for(slot, self.is_dynamic(&slot.name));
+        let hosts = self.hosts_for(slot, self.kind(&slot.name).restricted());
         self.check_hosts(&slot.name, &hosts)?;
         self.set_hosts(slot, hosts);
         Ok(())
@@ -115,6 +126,7 @@ impl Registry {
         self.hosts.write().unwrap().retain(|_, s| !Arc::ptr_eq(s, &slot));
         self.dynamic.write().unwrap().remove(name);
         self.managed.write().unwrap().remove(name);
+        self.installed.write().unwrap().remove(name);
         Some(slot)
     }
 
@@ -178,6 +190,8 @@ impl Registry {
     pub fn kind(&self, name: &str) -> Kind {
         if self.is_dynamic(name) {
             Kind::Dynamic
+        } else if self.installed.read().unwrap().contains(name) {
+            Kind::Installed
         } else if self.is_managed(name) {
             Kind::Managed
         } else {
@@ -187,5 +201,9 @@ impl Registry {
 
     pub fn dynamic_count(&self) -> usize {
         self.dynamic.read().unwrap().len()
+    }
+
+    pub fn installed_count(&self) -> usize {
+        self.installed.read().unwrap().len()
     }
 }

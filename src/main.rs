@@ -386,6 +386,7 @@ async fn main() -> Result<()> {
                 compression: true,
                 replicate: None,
                 dynamic: None,
+                install: None,
                 trusted_proxies: crate::proxy::default_list(),
                 domain: None,
                 tls: match (tls_cert, tls_key) {
@@ -417,6 +418,7 @@ async fn main() -> Result<()> {
                     max_block_ms: Some(max_block_ms),
                     log_files: true,
                     do_idle_ms: None,
+                    installed: false,
                     cache_mb,
                 }],
             };

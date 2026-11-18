@@ -72,6 +72,10 @@ pub async fn edge_handler(
     }
 }
 
+/// service binding 的 props（JSON）：只由 rucloud 放進請求，外來請求不會有（edge 拿掉所有 x-rucloud-* 標頭）
+#[derive(Clone)]
+pub struct SvcProps(pub String);
+
 pub async fn handle(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body> {
     use std::sync::atomic::Ordering;
     let start = Instant::now();
@@ -151,6 +155,7 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
         .unwrap_or("localhost")
         .to_string();
     let url = format!("{scheme}://{host}{}", req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/"));
+    let props = req.extensions().get::<SvcProps>().map(|p| p.0.clone());
     let mut extra = vec![
         ("x-rucloud-url", url),
         ("cf-connecting-ip", client.to_string()),
@@ -173,9 +178,14 @@ async fn route(app: &Arc<App>, req: Request, peer: SocketAddr) -> Response<Body>
             client.to_string()
         },
     ));
-    // 閘道快取（應用設定 cache_mb 才開）：GET、沒有 Authorization、不是 WebSocket
+    // 閘道快取（應用設定 cache_mb 才開）：GET、沒有 Authorization、不是 WebSocket、不是帶 props 的 service 呼叫
+    let has_props = props.is_some();
+    if let Some(p) = props {
+        extra.push(("x-rucloud-props", p));
+    }
     let cache_key = app.cache.edge.as_ref().filter(|_| {
-        req.method() == axum::http::Method::GET
+        !has_props
+            && req.method() == axum::http::Method::GET
             && !req.headers().contains_key(header::AUTHORIZATION)
             && !crate::ws::is_upgrade(req.headers())
     });

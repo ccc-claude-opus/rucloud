@@ -40,6 +40,8 @@ pub struct Deployer {
     pub grace: Duration,
     /// `[dynamic]`：允許在執行中新增應用
     pub dynamic: Option<crate::config::DynamicCfg>,
+    /// `[install]`：安裝的應用
+    pub install: Option<crate::config::InstallCfg>,
     /// 新增、刪除應用一次只做一個
     pub dynamic_lock: tokio::sync::Mutex<()>,
 }
@@ -79,7 +81,7 @@ impl Deployer {
     /// 收一個 tar.gz，解到新的版本資料夾。檢查 wrangler 設定讀得起來才算數
     pub fn store(&self, app: &str, tar_gz: &[u8], message: &str) -> Result<Version> {
         let slot = self.slot(app)?;
-        self.store_version(app, slot.entry.env.as_deref(), self.registry.is_dynamic(app), tar_gz, message)
+        self.store_version(app, slot.entry.env.as_deref(), self.registry.kind(app).restricted(), tar_gz, message)
     }
 
     fn store_version(&self, app: &str, env: Option<&str>, dynamic: bool, tar_gz: &[u8], message: &str) -> Result<Version> {
@@ -165,7 +167,7 @@ impl Deployer {
         };
         let (ctx, s2, code2) = (self.ctx.clone(), slot.clone(), code.clone());
         let new = tokio::task::spawn_blocking(move || App::load(&s2.entry, &ctx, &code2, &s2.name, &s2.shared)).await??;
-        let hosts = self.registry.hosts_for_cfg(&slot, &new.cfg, self.registry.is_dynamic(app));
+        let hosts = self.registry.hosts_for_cfg(&slot, &new.cfg, self.registry.kind(app).restricted());
         if let Err(e) = self.registry.check_hosts(app, &hosts) {
             if let Some(p) = &new.pool {
                 p.stop();
@@ -318,7 +320,11 @@ fn valid_dynamic_name(name: &str, prefix: &str) -> Result<()> {
 /// 執行中新增的應用清單：dynamic.json（[dynamic]）、managed.json（部署時自動新增的）
 fn list_path(ctx: &Ctx, kind: Kind) -> PathBuf {
     ctx.state_root
-        .join(if kind == Kind::Dynamic { "dynamic.json" } else { "managed.json" })
+        .join(match kind {
+            Kind::Dynamic => "dynamic.json",
+            Kind::Installed => "installed.json",
+            _ => "managed.json",
+        })
 }
 
 fn read_list(ctx: &Ctx, kind: Kind) -> Vec<String> {
@@ -343,16 +349,37 @@ fn update_list(ctx: &Ctx, kind: Kind, name: &str, present: bool) -> Result<()> {
 
 /// 執行中新增的應用的設定。path 指到一個空資料夾：沒有 .dev.vars（密鑰用 rucloud secret 設定）。
 /// [dynamic] 的應用另外有自己的沙箱、記憶體與卡住的上限
-fn runtime_entry(dynamic: Option<&crate::config::DynamicCfg>, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
+/// 限制：(instances, memory_mb, max_block_ms)
+type Limits = (usize, u32, u64);
+
+fn runtime_entry(limits: Option<Limits>, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
     let source = ctx.state_root.join(name).join("source");
     std::fs::create_dir_all(&source)?;
     let mut v = serde_json::json!({ "path": source, "name": name, "d1_migrate": true, "sandbox": true });
-    if let Some(d) = dynamic {
-        v["instances"] = d.instances.into();
-        v["memory_mb"] = d.memory_mb.into();
-        v["max_block_ms"] = d.max_block_ms.into();
+    if let Some((instances, memory_mb, max_block_ms)) = limits {
+        v["instances"] = instances.into();
+        v["memory_mb"] = memory_mb.into();
+        v["max_block_ms"] = max_block_ms.into();
     }
     Ok(serde_json::from_value(v)?)
+}
+
+fn dynamic_limits(d: &crate::config::DynamicCfg) -> Limits {
+    (d.instances, d.memory_mb, d.max_block_ms)
+}
+
+fn install_entry(i: &crate::config::InstallCfg, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
+    let mut e = runtime_entry(Some((i.instances, i.memory_mb, i.max_block_ms)), ctx, name)?;
+    e.installed = true;
+    Ok(e)
+}
+
+/// 安裝的應用的權限（沒有檔案 = 沒有任何權限）
+pub fn load_grants(state_root: &Path, app: &str) -> crate::config::Grants {
+    std::fs::read_to_string(state_root.join(app).join("grants.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
 }
 
 impl Deployer {
@@ -374,15 +401,75 @@ impl Deployer {
         if self.registry.dynamic_count() >= d.max_apps {
             bail!("執行中新增的應用已經有 {} 個（max_apps）", d.max_apps);
         }
-        let entry = runtime_entry(Some(&d), &self.ctx, name)?;
+        let entry = runtime_entry(Some(dynamic_limits(&d)), &self.ctx, name)?;
         Ok((self.create(name, entry, Kind::Dynamic, tar_gz, message).await?, true))
+    }
+
+    fn install_cfg(&self) -> Result<&crate::config::InstallCfg> {
+        self.install.as_ref().context("rucloud.toml 沒有 [install]，不能安裝應用")
+    }
+
+    /// 用 [install] 的 token：安裝應用（用自己的名稱），或更新已安裝的應用。
+    /// 新安裝的應用沒有任何權限，安裝程式再用 set_grants 給
+    pub async fn put_installed(&self, name: &str, tar_gz: Vec<u8>, message: String) -> Result<(Version, bool)> {
+        let i = self.install_cfg()?.clone();
+        valid_name(name)?;
+        if let Some(d) = &self.dynamic
+            && name.starts_with(&d.prefix)
+        {
+            bail!("{} 開頭的名稱保留給 [dynamic] 的應用", d.prefix);
+        }
+        let _guard = self.dynamic_lock.lock().await;
+        if self.registry.get(name).is_some() {
+            if self.registry.kind(name) != Kind::Installed {
+                bail!("{name} 這個名稱已經是系統的應用，不能用來安裝");
+            }
+            return Ok((self.deploy_existing(name, tar_gz, message).await?, false));
+        }
+        if self.registry.installed_count() >= i.max_apps {
+            bail!("安裝的應用已經有 {} 個（max_apps）", i.max_apps);
+        }
+        // 上次移除但保留了資料的應用：舊的權限不沿用
+        let _ = std::fs::remove_file(self.ctx.state_root.join(name).join("grants.json"));
+        let entry = install_entry(&i, &self.ctx, name)?;
+        Ok((self.create(name, entry, Kind::Installed, tar_gz, message).await?, true))
+    }
+
+    /// 改變安裝的應用的權限，然後重新載入它
+    pub async fn set_grants(&self, name: &str, grants: crate::config::Grants) -> Result<()> {
+        let i = self.install_cfg()?;
+        if self.registry.kind(name) != Kind::Installed || self.registry.get(name).is_none() {
+            bail!("{name} 不是安裝的應用");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for s in &grants.services {
+            if !i.services.contains(&s.service) {
+                bail!("不能綁定到 {}（不在 [install] services 裡）", s.service);
+            }
+            let ok = !s.binding.is_empty()
+                && s.binding.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && s.binding.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            if !ok || !seen.insert(s.binding.clone()) {
+                bail!("綁定名稱不對或重複：{}", s.binding);
+            }
+            if s.entrypoint.is_some() {
+                bail!("安裝的應用的綁定不能指定 entrypoint");
+            }
+        }
+        let path = self.ctx.state_root.join(name).join("grants.json");
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(&grants)?)?;
+        std::fs::rename(tmp, path)?;
+        self.reload(name).await
     }
 
     /// 用完整的管理 token（rucloud deploy）：應用存在就部署新版本，不存在就新增（可以用所有綁定）
     pub async fn put_app(&self, name: &str, tar_gz: Vec<u8>, message: String) -> Result<(Version, bool)> {
         valid_name(name)?;
-        if self.registry.is_dynamic(name) {
-            return self.put_dynamic(name, tar_gz, message).await;
+        match self.registry.kind(name) {
+            Kind::Dynamic => return self.put_dynamic(name, tar_gz, message).await,
+            Kind::Installed => return self.put_installed(name, tar_gz, message).await,
+            _ => {}
         }
         let _guard = self.dynamic_lock.lock().await;
         if self.registry.get(name).is_some() {
@@ -405,9 +492,14 @@ impl Deployer {
     }
 
     async fn create(&self, name: &str, entry: crate::config::AppEntry, kind: Kind, tar_gz: Vec<u8>, message: String) -> Result<Version> {
+        // 已經有資料（例如移除時保留了資料、或原本是設定檔裡的應用）：失敗時不能刪
+        let had_state = self.ctx.state_root.join(name).join("versions").is_dir()
+            || std::fs::read_dir(self.ctx.state_root.join(name))
+                .is_ok_and(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name() != "source" && e.file_name() != "versions"));
+        let before = manifest(&self.ctx, name);
         let result = async {
             let (me, n) = (self.clone_handle(), name.to_string());
-            let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, kind == Kind::Dynamic, &tar_gz, &message)).await??;
+            let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, kind.restricted(), &tar_gz, &message)).await??;
             let code = versions_dir(&self.ctx, name).join(&v.id);
             let ctx = self.ctx.clone();
             let slot = tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await??;
@@ -432,14 +524,19 @@ impl Deployer {
         }
         .await;
         if result.is_err() && self.registry.get(name).is_none() {
-            let _ = std::fs::remove_dir_all(self.ctx.state_root.join(name));
+            if had_state {
+                // 資料留著，版本清單回到原來的樣子
+                let _ = save_manifest(&self.ctx, name, &before);
+            } else {
+                let _ = std::fs::remove_dir_all(self.ctx.state_root.join(name));
+            }
         }
         result
     }
 
     fn start_app(&self, slot: &Arc<Slot>, kind: Kind) {
         restart_background(slot, &slot.get(), &self.queues);
-        if kind != Kind::Dynamic {
+        if !kind.restricted() {
             let (s, stop) = (slot.clone(), slot.stopped.clone());
             tokio::spawn(async move {
                 tokio::select! {
@@ -479,17 +576,22 @@ impl Deployer {
 
     /// 啟動時載入上次執行中新增的應用
     pub async fn load_runtime_apps(&self) {
-        for kind in [Kind::Managed, Kind::Dynamic] {
+        for kind in [Kind::Managed, Kind::Dynamic, Kind::Installed] {
             for name in read_list(&self.ctx, kind) {
-                let dynamic = match (kind, &self.dynamic) {
-                    (Kind::Dynamic, None) => {
+                let entry = match (kind, &self.dynamic, &self.install) {
+                    (Kind::Dynamic, None, _) => {
                         tracing::warn!("[{name}] rucloud.toml 沒有 [dynamic]，略過");
                         continue;
                     }
-                    (Kind::Dynamic, Some(d)) => Some(d),
-                    _ => None,
+                    (Kind::Installed, _, None) => {
+                        tracing::warn!("[{name}] rucloud.toml 沒有 [install]，略過");
+                        continue;
+                    }
+                    (Kind::Dynamic, Some(d), _) => runtime_entry(Some(dynamic_limits(d)), &self.ctx, &name),
+                    (Kind::Installed, _, Some(i)) => install_entry(i, &self.ctx, &name),
+                    _ => runtime_entry(None, &self.ctx, &name),
                 };
-                let entry = match runtime_entry(dynamic, &self.ctx, &name) {
+                let entry = match entry {
                     Ok(e) => e,
                     Err(e) => {
                         tracing::error!("[{name}] 無法載入：{e:#}");
@@ -522,6 +624,7 @@ impl Deployer {
             queues: self.queues.clone(),
             grace: self.grace,
             dynamic: self.dynamic.clone(),
+            install: self.install.clone(),
             dynamic_lock: Default::default(),
         }
     }

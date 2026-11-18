@@ -2,7 +2,7 @@
 //! 以及 rucloud 自己的多應用設定 rucloud.toml。
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -218,12 +218,15 @@ pub struct RateLimitSimple {
     pub period: u64,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ServiceCfg {
     pub binding: String,
     pub service: String,
     /// 具名 entrypoint（目標應用 export 的 WorkerEntrypoint 類別）；不給就是 default
     pub entrypoint: Option<String>,
+    /// 給目標應用的資料（和 Cloudflare 一樣，目標在 ctx.props 讀到）；由設定決定，呼叫端改不了
+    #[serde(default)]
+    pub props: Option<Value>,
 }
 
 /// 這些設定不會從最上層繼承到 env.<名稱>（和 wrangler 一樣），環境裡沒寫就是沒有
@@ -381,6 +384,8 @@ pub struct ServeConfig {
     pub replicate: Option<crate::replicate::ReplicateCfg>,
     /// 允許透過管理 API 在執行中新增應用（每個應用自己的 Worker 程序與資料）
     pub dynamic: Option<DynamicCfg>,
+    /// 安裝的應用：由安裝程式（grant 的應用）新增，用自己的名稱，權限以 service binding 給
+    pub install: Option<InstallCfg>,
     /// 自己的網域：每個應用自動有 <名稱>.<base>
     pub domain: Option<DomainCfg>,
     /// 信任的反向代理（IP、CIDR，或 "cloudflare"）：只有從這些位址來的請求才採用
@@ -469,6 +474,9 @@ pub struct AppEntry {
     /// Worker 的 log 每天寫一個檔（<state>/<應用>/logs/）
     #[serde(default = "yes")]
     pub log_files: bool,
+    /// 安裝的應用（[install]）：權限讀自 <state>/<應用>/grants.json
+    #[serde(skip)]
+    pub installed: bool,
 }
 
 fn default_state() -> PathBuf {
@@ -510,6 +518,52 @@ pub struct DynamicCfg {
     /// 事件迴圈卡住多久（毫秒）就重開程序
     #[serde(default = "dyn_block")]
     pub max_block_ms: u64,
+}
+
+/// `[install]`：安裝的應用。像手機的 App：程式碼由安裝程式（grant 的應用）取得、檢查後交給 rucloud，
+/// 用自己的名稱（<名稱>.<網域>），只能用不會碰到其他應用的綁定；使用者同意的權限以 service binding
+/// （連到 services 列出的系統應用，props 說明是哪個應用、什麼權限）與對外連線開關給它
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct InstallCfg {
+    /// 只能管理安裝的應用的 token；不設就每次啟動隨機產生（透過 grant 交給安裝程式）
+    pub token: Option<String>,
+    /// 哪些應用（rucloud.toml 裡的名稱）是安裝程式：env 會有 RUCLOUD_ADMIN_URL 與 RUCLOUD_INSTALL_TOKEN
+    #[serde(default)]
+    pub grant: Vec<String>,
+    /// 安裝的應用可以被綁定到哪些應用（rucloud.toml 裡的名稱，例如檔案、相簿）
+    #[serde(default)]
+    pub services: Vec<String>,
+    /// 最多幾個應用
+    #[serde(default = "install_max")]
+    pub max_apps: usize,
+    #[serde(default = "one")]
+    pub instances: usize,
+    #[serde(default = "install_memory")]
+    pub memory_mb: u32,
+    #[serde(default = "install_block")]
+    pub max_block_ms: u64,
+}
+
+/// 安裝的應用的權限（<state>/<應用>/grants.json）
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct Grants {
+    /// 加進應用的 service binding（目標必須在 [install] services 裡）
+    #[serde(default)]
+    pub services: Vec<ServiceCfg>,
+    /// Worker 可以連到外部網路（fetch、WebSocket、connect）
+    #[serde(default)]
+    pub network: bool,
+}
+
+fn install_max() -> usize {
+    200
+}
+fn install_memory() -> u32 {
+    256
+}
+fn install_block() -> u64 {
+    30000
 }
 
 fn dyn_prefix() -> String {

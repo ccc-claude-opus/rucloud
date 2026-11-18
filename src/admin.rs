@@ -12,6 +12,8 @@
 //!   POST /apps/<應用>/versions/<id>/activate  切換到某個版本（rollback 也是用這個）
 //!   POST /apps/<應用>/rollback                回到上一個版本
 //!   POST /apps/<應用>/reload                  重新載入目前的版本（改了設定、密鑰之後）
+//!   GET  /apps/<應用>/grants                  安裝的應用的權限（[install]）
+//!   PUT  /apps/<應用>/grants                  改權限 {services: [{binding, service, props}], network}，然後重新載入
 //!   POST /analytics/sql                       Analytics Engine 的 SQL 查詢（body 是 SQL）
 //!   POST /queues/<佇列>/messages              送訊息 {body, contentType?, delaySeconds?}
 //!   POST /queues/<佇列>/messages/pull         HTTP pull consumer 取訊息 {batch_size, visibility_timeout_ms}
@@ -39,6 +41,8 @@ pub struct Admin {
     /// [dynamic] 的 token：只能新增、更新、刪除、查看 prefix 開頭的應用
     pub dynamic_token: Option<String>,
     pub dynamic_prefix: Option<String>,
+    /// [install] 的 token：只能安裝、更新、移除安裝的應用，改它們的權限
+    pub install_token: Option<String>,
     pub draining: Arc<AtomicBool>,
     pub deployer: Arc<crate::deploy::Deployer>,
     pub analytics: Arc<crate::analytics::Analytics>,
@@ -57,6 +61,7 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/apps/{app}/versions", get(versions).post(upload))
         .route("/apps/{app}/versions/{id}/activate", post(activate))
         .route("/apps/{app}/rollback", post(rollback))
+        .route("/apps/{app}/grants", get(get_grants).put(put_grants))
         .route("/apps/{app}/reload", post(reload))
         .route("/apps/{app}/cache/purge", post(purge))
         .route("/stats", get(stats))
@@ -83,6 +88,14 @@ async fn auth(State(admin): S, req: Request, next: Next) -> Response {
         .and_then(|v| v.strip_prefix("Bearer "));
     let query = req.uri().query().unwrap_or("").split('&').find_map(|kv| kv.strip_prefix("token="));
     let given = bearer.or(query);
+    if given.is_some() && given == admin.install_token.as_deref() {
+        if install_scope(&admin, req.method(), req.uri().path()) {
+            let mut req = req;
+            req.extensions_mut().insert(InstallScope);
+            return next.run(req).await;
+        }
+        return (StatusCode::FORBIDDEN, "這個 token 只能管理安裝的應用\n").into_response();
+    }
     if given.is_some() && given == admin.dynamic_token.as_deref() {
         if dynamic_scope(&admin, req.method(), req.uri().path()) {
             let mut req = req;
@@ -102,6 +115,33 @@ async fn auth(State(admin): S, req: Request, next: Next) -> Response {
 /// 標記：這個請求用的是 [dynamic] 的 token
 #[derive(Clone, Copy)]
 struct DynamicScope;
+
+/// 標記：這個請求用的是 [install] 的 token
+#[derive(Clone, Copy)]
+struct InstallScope;
+
+/// [install] 的 token 能做的事：GET /apps（清單）；PUT /apps/<名稱>（安裝或更新，名稱沒被用掉或是安裝的應用）；
+/// 安裝的應用的 DELETE、GET logs / versions / grants、PUT grants、POST rollback、PUT secrets/<名稱>
+fn install_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
+    use axum::http::Method;
+    if path == "/apps" {
+        return *method == Method::GET;
+    }
+    let Some(rest) = path.strip_prefix("/apps/") else { return false };
+    let mut it = rest.split('/');
+    let name = it.next().unwrap_or("");
+    let installed = admin.apps.kind(name) == crate::registry::Kind::Installed && admin.apps.get(name).is_some();
+    let free = admin.apps.get(name).is_none();
+    match (it.next(), it.next()) {
+        (None, _) => (*method == Method::PUT && (installed || free)) || (*method == Method::DELETE && installed),
+        (Some("logs" | "versions"), None) => installed && *method == Method::GET,
+        (Some("grants"), None) => installed && (*method == Method::GET || *method == Method::PUT),
+        (Some("rollback"), None) => installed && *method == Method::POST,
+        // 套件宣告的密鑰（例如登入用的簽章金鑰）由安裝程式產生
+        (Some("secrets"), Some(_)) => installed && *method == Method::PUT,
+        _ => false,
+    }
+}
 
 /// [dynamic] 的 token 能做的事：PUT / DELETE /apps/<名稱>，GET /apps/<名稱>/logs、versions（名稱以 prefix 開頭）
 fn dynamic_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
@@ -281,10 +321,13 @@ async fn put_app(
     Path(app): Path<String>,
     Query(q): Query<UploadQuery>,
     scope: Option<axum::Extension<DynamicScope>>,
+    install: Option<axum::Extension<InstallScope>>,
     body: axum::body::Bytes,
 ) -> Response {
     let msg = q.message.unwrap_or_default();
-    let result = if scope.is_some() {
+    let result = if install.is_some() {
+        admin.deployer.put_installed(&app, body.to_vec(), msg).await
+    } else if scope.is_some() {
         admin.deployer.put_dynamic(&app, body.to_vec(), msg).await
     } else {
         admin.deployer.put_app(&app, body.to_vec(), msg).await
@@ -365,6 +408,20 @@ async fn activate(State(admin): S, Path((app, id)): Path<(String, String)>) -> R
 async fn rollback(State(admin): S, Path(app): Path<String>) -> Response {
     match admin.deployer.rollback(&app).await {
         Ok(to) => axum::Json(json!({ "current": to })).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+async fn get_grants(State(admin): S, Path(app): Path<String>) -> Response {
+    if admin.apps.kind(&app) != crate::registry::Kind::Installed {
+        return fail(anyhow::anyhow!("{app} 不是安裝的應用"));
+    }
+    axum::Json(crate::deploy::load_grants(&admin.deployer.ctx.state_root, &app)).into_response()
+}
+
+async fn put_grants(State(admin): S, Path(app): Path<String>, axum::Json(g): axum::Json<crate::config::Grants>) -> Response {
+    match admin.deployer.set_grants(&app, g).await {
+        Ok(()) => axum::Json(crate::deploy::load_grants(&admin.deployer.ctx.state_root, &app)).into_response(),
         Err(e) => fail(e),
     }
 }

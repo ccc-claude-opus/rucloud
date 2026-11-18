@@ -186,6 +186,30 @@ fn check_ports(cfg: &ServeConfig, r: &mut Report) {
             d.prefix, d.max_apps, d.memory_mb, d.max_block_ms
         ));
     }
+    if let Some(i) = &cfg.install {
+        match &cfg.admin {
+            None => r.err("[install] 的 API 在管理埠上，需要 [admin]"),
+            Some(a) if a.token.is_none() => r.ok("[install]：管理 API 沒有設 token，啟動時會自動產生（存在 <state_dir>/admin-token）"),
+            Some(_) => {}
+        }
+        let names: Vec<String> = cfg.apps.iter().filter_map(|a| crate::app::app_name(a).ok()).collect();
+        for (what, list) in [("grant", &i.grant), ("services", &i.services)] {
+            for g in list {
+                if !names.contains(g) {
+                    r.err(&format!("[install] {what} 的 {g} 不是 rucloud.toml 裡的應用"));
+                }
+            }
+        }
+        if i.token.as_deref().is_some_and(|t| t.len() < 16) {
+            r.err("[install] token 太短（至少 16 個字）");
+        }
+        r.ok(&format!(
+            "安裝的應用：最多 {} 個，每個 {} MB；可以綁定到 {}",
+            i.max_apps,
+            i.memory_mb,
+            if i.services.is_empty() { "（沒有）".to_string() } else { i.services.join("、") }
+        ));
+    }
     if let Some(rp) = &cfg.replicate {
         match crate::replicate::Remote::new(rp) {
             Ok(_) if rp.interval == 0 => r.err("[replicate] interval 要大於 0"),
