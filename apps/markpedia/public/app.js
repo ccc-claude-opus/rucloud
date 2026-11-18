@@ -1,13 +1,31 @@
 // markpedia 前端：hash 路由的維基式 SPA。
-// 渲染順序固定為 marked（GFM）→ Mermaid 圖表 → KaTeX 數學，
+// 渲染順序固定為 marked（GFM）→ Mermaid 圖表（需要時才載入）→ KaTeX 數學，
 // 先搬走 mermaid 區塊才掃數學，避免圖表的內容被誤判成 $...$。
 
 const el = document.getElementById('app');
 
 marked.use({ gfm: true });
 
-if (window.mermaid) {
-  mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+// Mermaid（約 3 MB）只在條目真的有圖表時才載入：其他頁面不必下載與執行它
+const MERMAID_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js';
+let mermaidLoading = null;
+function loadMermaid() {
+  if (!mermaidLoading) {
+    mermaidLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = MERMAID_SRC;
+      s.onload = () => {
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'neutral' });
+        resolve(window.mermaid);
+      };
+      s.onerror = () => {
+        mermaidLoading = null; // 下次再試
+        reject(new Error('無法載入 Mermaid'));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return mermaidLoading;
 }
 
 const LANG_LABEL = { zh: '繁體中文', en: 'English' };
@@ -77,8 +95,17 @@ async function renderMarkdown(box, src) {
     pre.textContent = code.textContent;
     code.parentElement.replaceWith(pre);
   }
-  if (window.mermaid) {
-    for (const node of box.querySelectorAll('pre.mermaid-box')) {
+  const graphs = box.querySelectorAll('pre.mermaid-box');
+  let mermaid = null;
+  if (graphs.length) {
+    try {
+      mermaid = await loadMermaid();
+    } catch {
+      // 載入失敗：圖表維持原始碼
+    }
+  }
+  if (mermaid) {
+    for (const node of graphs) {
       try {
         mermaidSeq += 1;
         const { svg } = await mermaid.render(`graph-${mermaidSeq}`, node.textContent);
