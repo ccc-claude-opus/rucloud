@@ -16,6 +16,7 @@
 | TypeScript `main` | Node 24 的型別轉換（`--experimental-transform-types`，enum、namespace 也可以）；不讀 `tsconfig.json` 的 `paths` |
 | 設定檔 | `wrangler.jsonc`、`wrangler.json`、`wrangler.toml`；`env.<名稱>` 多環境 |
 | 相對 import | 可以省略副檔名（依序找 `.ts` `.js` `.mjs` `.mts` `.tsx` `.jsx` 與 `/index.*`） |
+| npm 套件 | 從應用資料夾的 `node_modules/` 載入（不打包）；exports 條件和 wrangler 一樣有 `workerd`、`worker`、`browser`（Node 的 `node`、`import`、`require` 也在，誰先寫在套件的 exports 裡就用誰） |
 | 模組規則 | 預設 `.txt` `.html` `.sql` → 字串、`.bin` → `ArrayBuffer`、`.wasm` → `WebAssembly.Module`；`rules = [{ type = "Text" \| "Data" \| "CompiledWasm", globs = [...] }]` 自訂；`.json` 不需要 import attribute |
 | 打包 | 不打包（不跑 esbuild）：`node_modules` 裡的套件由 Node 直接載入 |
 | CPU 時間限制 | 沒有逐請求的 CPU 計時；事件迴圈卡住超過 `max_block_ms`（預設 30 秒）會重開程序 |

@@ -260,7 +260,8 @@ impl App {
             "doIdleMs": entry.do_idle_ms.unwrap_or(60_000),
         });
         let logs = shared.logs.clone();
-        let mut node_args = Vec::new();
+        // npm 套件的 exports 條件和 wrangler 打包時一樣：workerd、worker、browser（Node 自己的 node、import 也在）
+        let mut node_args: Vec<String> = ["workerd", "worker", "browser"].iter().map(|c| format!("--conditions={c}")).collect();
         if entry.sandbox {
             // 可讀：應用資料夾、rucloud 的執行環境；可寫：SQLite 型 Durable Object 的資料夾
             let runtime_dir = ctx.host_js.parent().unwrap_or(&ctx.host_js);
