@@ -25,6 +25,7 @@ pub struct Wrangler {
     pub vectorize: Vec<VectorizeCfg>,
     pub ai: Option<AiCfg>,
     pub images: Option<ImagesCfg>,
+    pub send_email: Vec<crate::email::SendEmailCfg>,
     pub ratelimits: Vec<RateLimitCfg>,
     pub services: Vec<ServiceCfg>,
     pub migrations: Vec<MigrationCfg>,
@@ -247,6 +248,7 @@ const NON_INHERITABLE: &[&str] = &[
     "vectorize",
     "ai",
     "images",
+    "send_email",
     "ratelimits",
 ];
 
@@ -267,7 +269,6 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ("unsafe", "不支援 unsafe 綁定"),
     ("containers", "不支援 Containers"),
     ("browser", "不支援 Browser Rendering"),
-    ("send_email", "不支援 Email Workers"),
     ("dispatch_namespaces", "不支援 Workers for Platforms"),
     ("mtls_certificates", "不支援 mTLS 憑證綁定"),
     ("secrets_store_secrets", "不支援 Secrets Store；請用 .dev.vars 或 env_file"),
@@ -392,6 +393,8 @@ pub struct ServeConfig {
     pub dynamic: Option<DynamicCfg>,
     /// 安裝的應用：由安裝程式（grant 的應用）新增，用自己的名稱，權限以 service binding 給
     pub install: Option<InstallCfg>,
+    /// 寄信（send_email 綁定）用的 SMTP；管理 API 的 /email 改過後以 <state_dir>/email.json 為準
+    pub email: Option<crate::email::EmailCfg>,
     /// 自己的網域：每個應用自動有 <名稱>.<base>
     pub domain: Option<DomainCfg>,
     /// 信任的反向代理（IP、CIDR，或 "cloudflare"）：只有從這些位址來的請求才採用
@@ -560,6 +563,9 @@ pub struct Grants {
     /// Worker 可以連到外部網路（fetch、WebSocket、connect）
     #[serde(default)]
     pub network: bool,
+    /// 可以用 send_email 綁定寄信（收件人仍限於寄信設定裡驗證過的地址）
+    #[serde(default)]
+    pub email: bool,
 }
 
 fn install_max() -> usize {

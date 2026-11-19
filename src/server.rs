@@ -19,6 +19,7 @@ const HOST_JS: &str = include_str!("../runtime/host.mjs");
 const WORKERS_JS: &str = include_str!("../runtime/cloudflare-workers.mjs");
 const REWRITER_JS: &str = include_str!("../runtime/html-rewriter.mjs");
 const SOCKETS_JS: &str = include_str!("../runtime/cloudflare-sockets.mjs");
+const EMAIL_JS: &str = include_str!("../runtime/cloudflare-email.mjs");
 
 /// 把內嵌的 JS 執行環境寫到 state 資料夾，回傳 host.mjs 的路徑
 fn write_runtime(state_root: &Path) -> Result<PathBuf> {
@@ -28,6 +29,7 @@ fn write_runtime(state_root: &Path) -> Result<PathBuf> {
     std::fs::write(dir.join("cloudflare-workers.mjs"), WORKERS_JS)?;
     std::fs::write(dir.join("html-rewriter.mjs"), REWRITER_JS)?;
     std::fs::write(dir.join("cloudflare-sockets.mjs"), SOCKETS_JS)?;
+    std::fs::write(dir.join("cloudflare-email.mjs"), EMAIL_JS)?;
     Ok(dir.join("host.mjs").canonicalize()?)
 }
 
@@ -154,10 +156,12 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     for (slot, _) in &apps {
         registry.insert(slot.clone(), crate::registry::Kind::Config)?;
     }
+    let mailer = Arc::new(crate::email::Mailer::open(&state_root, cfg.email.clone())?);
     let hub = Arc::new(Hub {
         apps: registry.clone(),
         queues: queues.clone(),
         analytics: analytics.clone(),
+        mailer: mailer.clone(),
     });
     // 綁定 API 不參與優雅關閉：還在處理的請求可能需要它，程序結束時才停
     tokio::spawn(async move { axum::serve(bind_listener, bindings::router(hub)).await });
@@ -237,6 +241,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             install_token: cfg.install.as_ref().and_then(|i| i.token.clone()),
             deployer: deployer.clone(),
             analytics: analytics.clone(),
+            mailer: mailer.clone(),
         });
         let listener = tokio::net::TcpListener::bind(addr)
             .await

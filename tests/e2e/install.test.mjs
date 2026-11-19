@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,7 +111,7 @@ path = "${systemApp(dir, 'hello')}"
     const created = await admin(adminPort, '/apps/notes?message=1.0', { method: 'PUT', body: pack(notes('1.0', edgePort)) });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     assert.deepEqual((await edge(edgePort, 'notes.localhost', '/')).body, { version: '1.0', env: ['VERSION'] });
-    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false });
+    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false });
     const net = (await edge(edgePort, 'notes.localhost', '/net')).body;
     assert.match(net.fetch, /沒有連線到外部網路的權限/);
     assert.match(net.http, /沒有連線到外部網路的權限/);
@@ -178,7 +179,7 @@ path = "${systemApp(dir, 'hello')}"
     // 重新安裝：舊的權限不沿用
     assert.equal((await admin(adminPort, '/apps/second', { method: 'DELETE' })).status, 200);
     assert.equal((await admin(adminPort, '/apps/notes', { method: 'PUT', body: pack(notes('2.0', edgePort)) })).status, 201);
-    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false });
+    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false });
   } finally {
     await rc.stop();
   }
@@ -269,5 +270,129 @@ path = "${systemApp(dir, 'installer')}"
     assert.doesNotMatch(await depth(), /queue="other:tasks"} [1-9]/);
   } finally {
     await rc.stop();
+  }
+});
+
+// 寄信：SMTP 設定（管理 API /email）、安裝的應用要有 email 權限、只能寄給驗證過的收件地址
+function fakeSmtp() {
+  const mails = [];
+  const server = net.createServer((sock) => {
+    let buf = '', data = null, mail = { to: [] };
+    sock.write('220 fake ESMTP\r\n');
+    sock.on('data', (d) => {
+      buf += d;
+      for (;;) {
+        if (data !== null) {
+          const end = buf.indexOf('\r\n.\r\n');
+          if (end < 0) return;
+          mails.push({ ...mail, data: data + buf.slice(0, end) });
+          buf = buf.slice(end + 5);
+          data = null;
+          mail = { to: [] };
+          sock.write('250 queued\r\n');
+          continue;
+        }
+        const i = buf.indexOf('\r\n');
+        if (i < 0) return;
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const cmd = line.slice(0, 4).toUpperCase();
+        if (cmd === 'EHLO' || cmd === 'HELO') sock.write('250-fake\r\n250 8BITMIME\r\n');
+        else if (cmd === 'MAIL') { mail.from = /<(.*)>/.exec(line)[1]; sock.write('250 ok\r\n'); }
+        else if (cmd === 'RCPT') { mail.to.push(/<(.*)>/.exec(line)[1]); sock.write('250 ok\r\n'); }
+        else if (cmd === 'DATA') { data = ''; sock.write('354 go\r\n'); }
+        else if (cmd === 'QUIT') { sock.end('221 bye\r\n'); return; }
+        else sock.write('250 ok\r\n');
+      }
+    });
+  });
+  return { server, mails };
+}
+
+test('寄信：SMTP 設定、email 權限、驗證過的收件地址', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rc-mail-'));
+  const smtp = fakeSmtp();
+  await new Promise((r) => smtp.server.listen(0, '127.0.0.1', r));
+  const smtpPort = smtp.server.address().port;
+  const [edgePort, adminPort] = [await freePort(), await freePort()];
+  const cfg = join(dir, 'rucloud.toml');
+  writeFileSync(cfg, `state_dir = "${join(dir, 'state')}"
+[edge]
+port = ${edgePort}
+[admin]
+port = ${adminPort}
+bind = "127.0.0.1"
+token = "${ADMIN_TOKEN}"
+[install]
+token = "${INSTALL_TOKEN}"
+grant = ["installer"]
+[[app]]
+path = "${systemApp(dir, 'installer')}"
+`);
+  const rc = await start({ args: ['serve', cfg], ready: `http://127.0.0.1:${adminPort}/apps` });
+  const mailer = {
+    'wrangler.jsonc': JSON.stringify({ name: 'x', main: 'src/worker.js', send_email: [{ name: 'MAIL' }, { name: 'ONLY', destination_address: 'boss@example.com' }] }),
+    'src/worker.js': `import { EmailMessage } from 'cloudflare:email';
+    export default {
+      async fetch(request, env) {
+        const u = new URL(request.url);
+        const to = u.searchParams.get('to');
+        try {
+          if (u.pathname === '/raw') {
+            await env.MAIL.send(new EmailMessage('app@example.com', to, 'From: app@example.com\\r\\nTo: ' + to + '\\r\\nSubject: raw\\r\\n\\r\\nhello raw\\r\\n'));
+            return new Response('sent');
+          }
+          if (u.pathname === '/only') { await env.ONLY.send({ from: 'app@example.com', to, subject: 'x', text: 'x' }); return new Response('sent'); }
+          const r = await env.MAIL.send({ from: { email: 'app@example.com', name: '應用' }, to, subject: '你好', text: '純文字', html: '<b>HTML</b>' });
+          return new Response(r.messageId ? 'sent' : 'no id');
+        } catch (e) {
+          return new Response(e.message, { status: 500 });
+        }
+      },
+    };`,
+  };
+  const get = async (path) => {
+    const r = await edge(edgePort, 'mailer.localhost', path);
+    return `${r.status} ${typeof r.body === 'string' ? r.body : JSON.stringify(r.body)}`;
+  };
+  try {
+    assert.equal((await admin(adminPort, '/apps/mailer', { method: 'PUT', body: pack(mailer) })).status, 201);
+    // 還沒設定 SMTP、也還沒有權限
+    assert.match(await get('/?to=me@example.com'), /500 .*沒有寄信的權限/);
+    assert.equal((await admin(adminPort, '/apps/mailer/grants', { method: 'PUT', json: { email: true } })).status, 200);
+    assert.match(await get('/?to=me@example.com'), /500 .*還沒設定寄信/);
+
+    // 寄信設定只有完整的管理 token 能改；不加密只限本機
+    const email = { host: '127.0.0.1', port: smtpPort, security: 'none', from: 'me@example.com', recipients: ['me@example.com', 'boss@example.com'] };
+    assert.equal((await admin(adminPort, '/email', { method: 'PUT', json: email })).status, 403, 'install token');
+    assert.match(JSON.stringify((await admin(adminPort, '/email', { method: 'PUT', json: { ...email, host: 'smtp.example.com' }, token: ADMIN_TOKEN })).body), /只能用在本機/);
+    const set = await admin(adminPort, '/email', { method: 'PUT', json: { ...email, password: 'pw' }, token: ADMIN_TOKEN });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal(set.body.has_password, true);
+    assert.equal(JSON.stringify(set.body).includes('"pw"'), false, '不回傳密碼');
+    assert.equal((await admin(adminPort, '/email')).body.from, 'me@example.com', 'install token 可以讀（不含密碼）');
+
+    // 物件形式（純文字 + HTML）、EmailMessage（MIME）
+    assert.equal(await get('/?to=me@example.com'), '200 sent');
+    assert.equal(await get('/raw?to=me@example.com'), '200 sent');
+    assert.equal(smtp.mails.length, 2);
+    assert.equal(smtp.mails[0].from, 'me@example.com', 'SMTP 的寄件者是設定的帳號');
+    assert.deepEqual(smtp.mails[0].to, ['me@example.com']);
+    assert.match(smtp.mails[0].data, /Subject: =\?UTF-8\?B\?5L2g5aW9\?=/);
+    assert.match(smtp.mails[0].data, /multipart\/alternative/);
+    assert.match(smtp.mails[1].data, /hello raw/);
+    // 只能寄給驗證過的地址；綁定的 destination_address
+    assert.match(await get('/?to=stranger@example.com'), /500 .*不是驗證過的收件地址/);
+    assert.match(await get('/only?to=me@example.com'), /500 .*只能寄給 boss@example.com/);
+    assert.equal(await get('/only?to=boss@example.com'), '200 sent');
+    // 測試信
+    assert.equal((await admin(adminPort, '/email/test', { method: 'POST', json: { to: 'me@example.com' }, token: ADMIN_TOKEN })).status, 200);
+    assert.equal(smtp.mails.length, 4);
+    // 拿掉權限
+    assert.equal((await admin(adminPort, '/apps/mailer/grants', { method: 'PUT', json: { email: false } })).status, 200);
+    assert.match(await get('/?to=me@example.com'), /500 .*沒有寄信的權限/);
+  } finally {
+    await rc.stop();
+    smtp.server.close();
   }
 });

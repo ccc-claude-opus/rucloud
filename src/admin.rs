@@ -46,6 +46,7 @@ pub struct Admin {
     pub draining: Arc<AtomicBool>,
     pub deployer: Arc<crate::deploy::Deployer>,
     pub analytics: Arc<crate::analytics::Analytics>,
+    pub mailer: Arc<crate::email::Mailer>,
 }
 
 type S = State<Arc<Admin>>;
@@ -65,6 +66,8 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/apps/{app}/reload", post(reload))
         .route("/apps/{app}/cache/purge", post(purge))
         .route("/stats", get(stats))
+        .route("/email", get(get_email).put(put_email).delete(delete_email))
+        .route("/email/test", post(test_email))
         .route("/queues", get(queues))
         .route("/analytics/sql", post(analytics_sql))
         .route("/queues/{queue}/messages", post(queue_send))
@@ -124,7 +127,8 @@ struct InstallScope;
 /// 安裝的應用的 DELETE、GET logs / versions / grants、PUT grants、POST rollback、PUT secrets/<名稱>
 fn install_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
     use axum::http::Method;
-    if path == "/apps" {
+    // 寄信設定（不含密碼）：安裝程式用來說明 email 權限
+    if path == "/apps" || path == "/email" {
         return *method == Method::GET;
     }
     let Some(rest) = path.strip_prefix("/apps/") else { return false };
@@ -422,6 +426,46 @@ async fn get_grants(State(admin): S, Path(app): Path<String>) -> Response {
 async fn put_grants(State(admin): S, Path(app): Path<String>, axum::Json(g): axum::Json<crate::config::Grants>) -> Response {
     match admin.deployer.set_grants(&app, g).await {
         Ok(()) => axum::Json(crate::deploy::load_grants(&admin.deployer.ctx.state_root, &app)).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+// ---------- 寄信設定（send_email 綁定用的 SMTP） ----------
+
+async fn get_email(State(admin): S) -> Response {
+    axum::Json(admin.mailer.describe()).into_response()
+}
+
+async fn put_email(State(admin): S, axum::Json(cfg): axum::Json<crate::email::EmailCfg>) -> Response {
+    match admin.mailer.set(cfg) {
+        Ok(()) => axum::Json(admin.mailer.describe()).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+async fn delete_email(State(admin): S) -> Response {
+    match admin.mailer.clear() {
+        Ok(()) => axum::Json(admin.mailer.describe()).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct TestEmail {
+    to: String,
+}
+
+/// 寄一封測試信給驗證過的收件地址
+async fn test_email(State(admin): S, axum::Json(t): axum::Json<TestEmail>) -> Response {
+    let from = admin.mailer.describe()["from"].as_str().unwrap_or_default().to_string();
+    let raw = format!(
+        "From: rucloud <{from}>\r\nTo: <{}>\r\nSubject: rucloud test\r\nDate: {}\r\nMessage-ID: <{:032x}@rucloud>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n這是 rucloud 的測試信，寄信的設定可以用。\r\n",
+        t.to,
+        chrono::Utc::now().to_rfc2822(),
+        rand::random::<u128>()
+    );
+    match admin.mailer.send(None, &from, std::slice::from_ref(&t.to), raw.as_bytes()).await {
+        Ok(()) => axum::Json(json!({ "ok": true })).into_response(),
         Err(e) => fail(e),
     }
 }

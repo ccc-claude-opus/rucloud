@@ -212,6 +212,30 @@ const res = (await env.IMAGES.input(stream)
 
 寬高上限 12000 px。沒有 `trim`、`sharpen`、`gamma`、`saturation`、`dpr` 等其他參數（會被忽略）。
 
+## 寄信（send_email）
+
+`"send_email": [{ "name": "MAIL", "destination_address": "…", "allowed_destination_addresses": […], "allowed_sender_addresses": […] }]`。透過設定的 SMTP 伺服器寄出（例如自己的信箱帳號），和 Cloudflare 一樣**只能寄給驗證過的收件地址**：
+
+```js
+import { EmailMessage } from 'cloudflare:email';
+await env.MAIL.send(new EmailMessage('app@example.com', 'me@example.com', rawMime));
+// 或直接給內容，rucloud 組成 MIME（UTF-8，有 text 也有 html 時是 multipart/alternative）
+await env.MAIL.send({ from: { email: 'app@example.com', name: '我的應用' }, to: 'me@example.com', subject: '提醒', text: '…', html: '…' });
+```
+
+```toml
+[email]
+host = "smtp.gmail.com"
+port = 465
+security = "tls"            # tls、starttls（預設，587）、none（只限本機的 SMTP 伺服器）
+username = "me@gmail.com"
+password = "應用程式密碼"
+from = "me@gmail.com"       # SMTP 的寄件者（MAIL FROM）
+recipients = ["me@gmail.com"]  # 驗證過的收件地址
+```
+
+也可以用管理 API 改：`GET /email`（不含密碼）、`PUT /email`（JSON，欄位同上；沒給 `password` 就沿用原來的）、`DELETE /email`、`POST /email/test {"to": "…"}` 寄測試信；改過後存在 `<state_dir>/email.json`（只有 rucloud 讀得到），以它為準。`[install]` 的 token 只能讀。信件的 `From` 標頭照應用寫的，但很多 SMTP 服務（例如 Gmail）會改成登入的帳號。
+
 ## Rate Limiting
 
 ```jsonc

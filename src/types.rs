@@ -72,6 +72,9 @@ pub fn generate(dir: &Path, w: &Wrangler, secrets: &[String], out_dir: &Path) ->
     for v in &w.vectorize {
         add(&v.binding, "VectorizeIndex".into());
     }
+    for e in &w.send_email {
+        add(&e.name, "SendEmail".into());
+    }
     if let Some(i) = &w.images {
         add(&i.binding, "ImagesBinding".into());
     }

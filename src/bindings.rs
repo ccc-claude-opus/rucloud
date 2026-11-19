@@ -21,6 +21,7 @@ pub struct Hub {
     pub apps: Arc<crate::registry::Registry>,
     pub queues: Arc<Queues>,
     pub analytics: Arc<crate::analytics::Analytics>,
+    pub mailer: Arc<crate::email::Mailer>,
 }
 
 type S = State<Arc<Hub>>;
@@ -78,6 +79,7 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/do/{ns}/{id}/{op}", any(do_forward))
         .route("/b/{app}/vectorize/{binding}/{op}", post(vectorize))
         .route("/b/{app}/images/info", post(images_info))
+        .route("/b/{app}/email/{binding}", post(send_email))
         .route("/b/{app}/images/transform", post(images_transform))
         .route("/b/{app}/ai/run", post(ai_run))
         .route("/b/{app}/assets", any(assets))
@@ -458,6 +460,34 @@ async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String
         ("x-rucloud-do-id", id.clone()),
     ];
     Ok(crate::gateway::forward(&app, Some(App::do_affinity(&id)), req, &extra, false).await?)
+}
+
+// ---------- 寄信 ----------
+
+#[derive(Deserialize)]
+struct EmailReq {
+    from: String,
+    to: Vec<String>,
+    /// MIME 格式的信（base64）
+    raw: String,
+}
+
+async fn send_email(State(hub): S, Path((app, binding)): Path<(String, String)>, Json(req): Json<EmailReq>) -> R<Json<Value>> {
+    let app = hub.app(&app)?;
+    let b = app
+        .cfg
+        .send_email
+        .iter()
+        .find(|e| e.name == binding)
+        .ok_or_else(|| not_found(&format!("send_email 綁定 {binding}")))?;
+    if !app.email_allowed {
+        return Err(ApiError(StatusCode::FORBIDDEN, format!("{} 沒有寄信的權限", app.name)));
+    }
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::STANDARD.decode(&req.raw).map_err(|e| anyhow!(e))?;
+    hub.mailer.send(Some(b), &req.from, &req.to, &raw).await?;
+    app.logs.push("email", &format!("寄信給 {}", req.to.join(", ")), false);
+    Ok(Json(json!({ "ok": true })))
 }
 
 // ---------- Images ----------

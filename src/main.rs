@@ -34,6 +34,7 @@ mod tls;
 mod types;
 mod vectorize;
 mod images;
+mod email;
 mod workflows;
 mod ws;
 
@@ -388,6 +389,7 @@ async fn main() -> Result<()> {
                 replicate: None,
                 dynamic: None,
                 install: None,
+                email: None,
                 trusted_proxies: crate::proxy::default_list(),
                 domain: None,
                 tls: match (tls_cert, tls_key) {

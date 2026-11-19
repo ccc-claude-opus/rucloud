@@ -96,6 +96,9 @@ registerHooks({
     if (specifier === 'cloudflare:sockets') {
       return { url: new URL('./cloudflare-sockets.mjs', import.meta.url).href, shortCircuit: true };
     }
+    if (specifier === 'cloudflare:email') {
+      return { url: new URL('./cloudflare-email.mjs', import.meta.url).href, shortCircuit: true };
+    }
     try {
       return next(specifier, context);
     } catch (e) {
@@ -1196,6 +1199,56 @@ function makeImages() {
   };
 }
 
+// send_email：EmailMessage（MIME 格式），或 { from, to, subject, text, html, cc, bcc, replyTo, headers }
+const mailAddr = (a) => (typeof a === 'string' ? a : a?.email || '');
+const mailName = (a) => (typeof a === 'string' ? `<${a}>` : a?.name ? `${mailWord(a.name)} <${a.email}>` : `<${a?.email}>`);
+const mailWord = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${Buffer.from(s).toString('base64')}?=`);
+const mailList = (v) => (v === undefined || v === null ? [] : Array.isArray(v) ? v : [v]);
+const mailB64 = (s) => Buffer.from(s).toString('base64').replace(/.{76}/g, '$&\r\n');
+
+function buildMail(m) {
+  if (!m.from) throw new TypeError('send_email：要給 from');
+  const to = mailList(m.to), cc = mailList(m.cc), bcc = mailList(m.bcc);
+  if (!to.length) throw new TypeError('send_email：要給 to');
+  const id = `<${crypto.randomUUID()}@rucloud>`;
+  const head = [
+    `From: ${mailName(m.from)}`,
+    `To: ${to.map(mailName).join(', ')}`,
+    ...(cc.length ? [`Cc: ${cc.map(mailName).join(', ')}`] : []),
+    ...(m.replyTo ? [`Reply-To: ${mailList(m.replyTo).map(mailName).join(', ')}`] : []),
+    `Subject: ${mailWord(String(m.subject ?? ''))}`,
+    `Date: ${new Date().toUTCString().replace('GMT', '+0000')}`,
+    `Message-ID: ${id}`,
+    'MIME-Version: 1.0',
+    ...Object.entries(m.headers || {}).filter(([k]) => /^[A-Za-z0-9-]+$/.test(k) && !/^(from|to|cc|bcc|subject|date|message-id|mime-version|content-type|content-transfer-encoding)$/i.test(k)).map(([k, v]) => `${k}: ${String(v).replace(/[\r\n]+/g, ' ')}`),
+  ];
+  const part = (type, s) => [`Content-Type: ${type}; charset=utf-8`, 'Content-Transfer-Encoding: base64', '', mailB64(s)].join('\r\n');
+  let body;
+  if (m.text !== undefined && m.html !== undefined) {
+    const b = `rucloud-${crypto.randomUUID()}`;
+    body = [`Content-Type: multipart/alternative; boundary="${b}"`, '', `--${b}`, part('text/plain', m.text), `--${b}`, part('text/html', m.html), `--${b}--`, ''].join('\r\n');
+  } else {
+    body = m.html !== undefined ? part('text/html', m.html) : part('text/plain', String(m.text ?? ''));
+  }
+  return { from: mailAddr(m.from), to: [...to, ...cc, ...bcc].map(mailAddr), raw: Buffer.from(`${head.join('\r\n')}\r\n${body}`), messageId: id };
+}
+
+function makeSendEmail(name) {
+  return {
+    async send(msg) {
+      let mail;
+      if (msg && typeof msg.from === 'string' && typeof msg.to === 'string' && msg.raw !== undefined && msg.subject === undefined) {
+        const raw = typeof msg.raw === 'string' ? Buffer.from(msg.raw) : new Uint8Array(await new Response(msg.raw).arrayBuffer());
+        mail = { from: msg.from, to: [msg.to], raw };
+      } else {
+        mail = buildMail(msg || {});
+      }
+      await rpc(`${B}/email/${enc(name)}`, { from: mail.from, to: mail.to, raw: toB64(mail.raw) });
+      return mail.messageId ? { messageId: mail.messageId } : undefined;
+    },
+  };
+}
+
 function makeAi() {
   return {
     async run(model, inputs, options = {}) {
@@ -1422,6 +1475,7 @@ function buildEnv() {
   for (const d of spec.durableObjects) env[d.binding] = new DurableObjectNamespace(d.binding);
   for (const b of spec.vectorize) env[b] = new VectorizeIndex(b);
   if (spec.images) env[spec.images] = makeImages();
+  for (const n of spec.sendEmail || []) env[n] = makeSendEmail(n);
   for (const b of spec.ratelimits) env[b] = makeRateLimiter(b);
   for (const b of spec.services) env[b] = makeService(b);
   for (const w of spec.workflows || []) env[w.binding] = new WorkflowBinding(w.name);

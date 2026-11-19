@@ -17,10 +17,14 @@ pub fn load(state_root: &Path, app: &str) -> BTreeMap<String, String> {
 }
 
 fn save(state_root: &Path, app: &str, m: &BTreeMap<String, String>) -> Result<()> {
-    let p = path(state_root, app);
+    write_private(&path(state_root, app), &serde_json::to_vec_pretty(m)?)
+}
+
+/// 只有自己讀得到（0600）的檔案，先寫暫存檔再換名
+pub fn write_private(p: &Path, data: &[u8]) -> Result<()> {
     std::fs::create_dir_all(p.parent().unwrap())?;
-    let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec_pretty(m)?)?;
+    let tmp = p.with_extension("tmp");
+    std::fs::write(&tmp, data)?;
     #[cfg(unix)]
     std::fs::set_permissions(&tmp, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     std::fs::rename(tmp, p)?;

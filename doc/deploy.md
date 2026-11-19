@@ -184,12 +184,13 @@ curl -X DELETE -H "Authorization: Bearer $RUCLOUD_DYNAMIC_TOKEN" "http://127.0.0
 
 ### 安裝的應用（`[install]`）
 
-像手機的 App：程式碼由一個「安裝程式」應用取得、檢查、徵得使用者同意後交給 rucloud，用**應用自己的名稱**（`<名稱>.<網域>`）執行。和 `[dynamic]` 一樣是不可信的程式碼（自己的程序、沙箱與資料，套件裡不能宣告 services、ai、analytics_engine_datasets、hyperdrive，不採用 wrangler 的 routes），差別是：
+像手機的 App：程式碼由一個「安裝程式」應用取得、檢查、徵得使用者同意後交給 rucloud，用**應用自己的名稱**（`<名稱>.<網域>`）執行。和 `[dynamic]` 一樣是不可信的程式碼（自己的程序、沙箱與資料，套件裡不能宣告 services、ai、analytics_engine_datasets、hyperdrive（`[dynamic]` 另外不能用 queues、workflows、send_email），不採用 wrangler 的 routes），差別是：
 
 * 名稱沒有前綴，但不能用 rucloud.toml 或部署時新增的應用已經用掉的名稱。
 * 權限由安裝程式另外給，存在 `<state_dir>/<應用>/grants.json`：
   * **service binding**：只能綁定到 `services` 列出的應用，`props` 告訴目標應用是誰、什麼權限（目標在 `ctx.props` 讀到，呼叫端偽造不了）。
   * **對外連線**（`network`）：預設關，關的時候 Worker 的 `fetch`、`WebSocket` 都會丟錯。開了也**只能連網際網路上的位址**：連線前先查 DNS，本機（`localhost`、`*.localhost`、127.0.0.0/8、::1）、私有網路（10/8、172.16/12、192.168/16、fc00::/7）、CGNAT、連結本地位址都擋下，免得繞過權限直接呼叫這台機器上的其他應用。`cloudflare:sockets` 與 Node 的網路模組（`node:net`、`node:http`…）一律不開放。rucloud 自己的綁定不受影響。這是在執行環境裡擋，不是作業系統層級的隔離。
+* **寄信**（`email`）：預設關；開了 Worker 才能用套件宣告的 `send_email` 綁定，而且仍然只能寄給寄信設定（`[email]`、管理 API 的 `/email`）裡驗證過的收件地址，見 [bindings.md](bindings.md#寄信send_email)。
 * 可以用 **Queues** 與 **Workflows**：佇列名稱在 rucloud 裡是全機共用的，安裝的應用的佇列會自動加上應用名稱前綴（套件裡寫 `tasks`，實際是 `<應用>:tasks`，包括 R2 事件通知與 dead letter queue），所以只碰得到自己的佇列；workflow 本來就是每個應用一份。移除應用並刪除資料（`purge`）時，它佇列裡還沒處理的訊息一起刪掉。
 
 ```toml
