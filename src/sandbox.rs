@@ -246,7 +246,7 @@ impl Sandbox {
             Err(e) => return fail(format!("bubblewrap 跑不起來：{e}")),
         }
         tracing::info!(
-            "不可信的應用放進 bubblewrap 的籠子{}{}",
+            "不可信的應用（與 isolate = true 的應用）的 Worker 放進 bubblewrap 的籠子{}{}，seccomp 過濾系統呼叫",
             sb.user.map(|(u, _)| format!("，使用者 uid {u}")).unwrap_or_default(),
             if sb.cgroups.is_some() { "，cgroup 限制資源" } else { "（沒有 cgroup v2：不限資源）" }
         );
