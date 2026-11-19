@@ -71,7 +71,9 @@ flowchart LR
 | Workflows（`step.do` / `sleep` / `waitForEvent`，持久化、可重試） | `workflows` | ✓ |
 | Hyperdrive（連線字串） | `hyperdrive` | ✓（不做連線池） |
 | Analytics Engine（`writeDataPoint` + SQL 查詢） | `analytics_engine_datasets` | ✓ |
-| Workers AI（`env.AI.run`） | `ai` | ✓ 轉給 OpenAI 相容後端 |
+| Workers AI（`env.AI.run`） | `ai` | ✓ 轉給 OpenAI 相容後端（`[ai]` 或管理 API 設定；每個應用每天的用量與上限） |
+| Images（`env.IMAGES`：`info`、`transform`、`draw`、`output`） | `images` | ✓ JPEG / PNG / WebP / GIF（不能輸出 AVIF） |
+| 寄信（`send_email`、`cloudflare:email` 的 `EmailMessage`） | `send_email` | ✓ 透過 SMTP，只能寄給驗證過的地址 |
 | AI Gateway（log、快取、限流、重試） | `rucloud.toml` 的 `[ai_gateway]` | ✓ |
 | HTTPS（自備憑證、ACME 自動申請）、gzip / brotli、回應快取 | `rucloud.toml` 的 `[tls]`、`cache_mb` | ✓ |
 | `import … from 'cloudflare:workers'`、`caches.default` | — | ✓ |
@@ -102,10 +104,11 @@ flowchart LR
 | `rucloud analytics "SELECT …"` | 查 Analytics Engine |
 | `rucloud backup -o 檔案`、`rucloud restore 檔案` | 備份與還原所有資料 |
 | `rucloud replica status \| restore [--at 時間]` | 持續複寫（`[replicate]`）的狀態與還原 |
-| 管理 API `PUT /apps/<名稱>`、`DELETE /apps/<名稱>` | 執行中新增、更新、刪除應用（`[dynamic]`，見 [doc/deploy.md](doc/deploy.md)） |
+| 管理 API `PUT /apps/<名稱>`、`DELETE /apps/<名稱>` | 執行中新增、更新、刪除應用（`[dynamic]`；安裝的應用 `[install]` 與它們的權限，見 [doc/deploy.md](doc/deploy.md)） |
+| 管理 API `/email`、`/ai` | 寄信（SMTP）與 Workers AI 後端的設定、AI 的用量 |
 | `rucloud ai-gateway --port 8790 [--cache-ttl 60]` | 單獨跑 AI Gateway |
 
-`rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。
+`rucloud.toml` 的寫法與 Docker 部署見 [doc/deploy.md](doc/deploy.md)。不可信的應用（`[install]`、`[dynamic]`）在 Linux 上會放進 bubblewrap 的籠子（`[isolation]`：自己的 namespace、seccomp、cgroup，連外只經過只放行網際網路位址的出口代理）。
 
 ## 跑 test-apps
 

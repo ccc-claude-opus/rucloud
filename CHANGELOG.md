@@ -1,7 +1,8 @@
 # 更新紀錄
 
-## 未發佈
+## 1.8.0 — 安裝的應用、寄信、Images、作業系統層級的隔離
 
+* **安裝的應用**（`[install]`）：像手機的 App，由一個「安裝程式」應用（`grant`）用自己的 token 以應用自己的名稱安裝、更新、移除不可信的程式碼；權限由安裝程式另外給（`PUT /apps/<名稱>/grants`）：綁定到 `services` 列出的系統應用（`props` 以 Cloudflare 相容的 `ctx.props` 傳給目標，呼叫端偽造不了）、對外連線（只能連網際網路上的位址）、寄信、AI。見 [doc/deploy.md](doc/deploy.md)。
 * **作業系統層級的隔離**（`[isolation]`，Linux）：`[install]`、`[dynamic]` 的應用（以及設定了 `isolate = true` 的應用）的 Worker 放進 bubblewrap 的籠子：自己的 mount、pid、ipc、uts、network namespace，只看得到執行環境、自己的程式碼與 Durable Object 資料夾；連外只能經過 rucloud 的出口代理（只放行網際網路上的位址）；rucloud 是 root 時換成沒有權限的使用者；cgroup v2 限制記憶體、CPU 與程序數；seccomp 擋掉 Worker 用不到的系統呼叫（ptrace、mount、bpf、io_uring…），籠子裡不能再建 namespace。`allow_connect` 讓籠子裡的應用連特定的本機服務。預設 `mode = "auto"`：有 bwrap 就用。
 * rucloud 與 Worker 程序之間改用 Unix socket（閘道 → Worker、Worker → 綁定 API、WebSocket 轉接），不再用 `127.0.0.1` 的 TCP 埠；為之後把 Worker 放進作業系統層級的隔離（network namespace）做準備。
 * **Workers AI 的設定與用量**：後端可以在 `[ai]` 或管理 API 的 `/ai` 設定（`base_url`、`api_key`、`model`、`embedding_model`），每個應用每天的請求數與 token 數記下來（`GET /ai/usage`），可以設每天的上限（`daily_requests`、`daily_tokens`）；環境變數 `RUCLOUD_AI_*` 仍然可以用。`[install]` 的應用給 `ai` 權限後可以用 `env.AI`。修正：沒有 AI 綁定的應用也能直接呼叫綁定 API 的 `/ai/run`。
@@ -10,6 +11,7 @@
 * `[install]`：安裝的應用可以用 Queues（佇列名稱自動加上應用名稱前綴，只碰得到自己的）、Workflows，以及 `send_email`（要安裝程式給 `email` 權限）；移除並刪除資料時清掉它佇列裡的訊息。Worker 只能送到自己有生產者綁定的佇列。
 * npm 套件照 wrangler 的 exports 條件（`workerd`、`worker`、`browser`）從 `node_modules/` 載入。
 * Worker 程序起不來時，錯誤訊息說出真正的原因：應用資料夾被移動或刪除、找不到 rucloud 的執行環境、找不到 Node.js（`rucloud.toml` 的 `node`），而不是一律「無法啟動 node：No such file or directory」；也寫進應用的 log（管理介面、`rucloud tail` 看得到）。
+* `sites/`：個人介紹頁（ccc）、入口網站（webportal）；`rucloud serve` 啟動時列出每個應用的網址。markpedia 只在有圖表的頁面載入 Mermaid。
 * `apps/`：完整的應用（map、myshop、friendbook、app-builder、boardgame、markpedia、music）從 `examples/` 搬過來。
 
 ## 1.7.1 — 修正

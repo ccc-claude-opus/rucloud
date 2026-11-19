@@ -60,8 +60,9 @@
 | 1.5.0 ✓ | 自己的網域與自動憑證 | `[domain]` 自動子網域、wrangler `routes`、每個網域一張憑證與 on-demand、`trusted_proxies` |
 | 1.6.0 ✓ | 像 `wrangler deploy` 一樣部署 | 部署時自動新增應用、`rucloud secret`、管理 API 透過 HTTPS 對外 |
 | 1.7.0 ✓ | 新主機幾分鐘架好 | 萬用字元憑證（DNS-01：Cloudflare、Linode）、預編執行檔、安裝腳本與 systemd |
+| 1.8.0 ✓ | 安裝不可信的應用 | `[install]`（權限、props、對外連線）、Queues 與 Workflows 各自一份、Images、寄信（SMTP）、Workers AI 的設定與用量、Unix socket、`[isolation]`（bubblewrap、出口代理、cgroup、seccomp）；為 ruwebos 做的 |
 
-## 定位：同一個專案，Cloudflare 與自己的主機都能跑（1.8～2.0）
+## 定位：同一個專案，Cloudflare 與自己的主機都能跑（1.9～2.0）
 
 rucloud 是用來架設**應用與個人網站**的平台，而且和 Cloudflare 相容：同一個 wrangler 專案，不改程式碼，既能 `wrangler deploy` 到 Cloudflare，也能 `rucloud deploy` 到有 rucloud 的主機。純靜態的網站也可以放在 GitHub Pages。
 
@@ -82,11 +83,11 @@ flowchart LR
 
 | 版本 | 主題 | 內容 |
 |---|---|---|
-| 1.8.0 | 相容性看得見 | `rucloud check --cloudflare`；範例標示能在哪裡跑；CI 驗證 wrangler 讀得懂每個範例；`doc/cloudflare.md`；靜態網站的三種放法 |
-| 1.9.0 | 兩邊互相搬家 | D1 / KV / R2 的匯出與匯入；GitHub Actions 部署範本；`rucloud deploy --from github:…` |
+| 1.9.0 | 相容性看得見 | `rucloud check --cloudflare`；範例標示能在哪裡跑；CI 驗證 wrangler 讀得懂每個範例；`doc/cloudflare.md`；靜態網站的三種放法 |
+| 1.10.0 | 兩邊互相搬家 | D1 / KV / R2 的匯出與匯入；GitHub Actions 部署範本；`rucloud deploy --from github:…` |
 | 2.0.0 | 小主機放很多應用 | 閒置的應用停止 Worker 程序（scale to zero）；個人網站範本 |
 
-### 1.8.0 — 相容性看得見
+### 1.9.0 — 相容性看得見
 
 * **`rucloud check --cloudflare`**：檢查專案搬到 Cloudflare 會不會壞，例如用了只有 rucloud 才有的東西（`[dynamic]`、`rucloud.toml` 才有的設定、Cloudflare 不支援的 Node API），或可能超過 Cloudflare 免費方案的限制（例如很長的串流、大量 CPU）。反過來，也列出 Cloudflare 有、但 rucloud 不支援的綁定。
 * **範例標示能在哪裡跑**：每個範例都標「Cloudflare ✓ / rucloud ✓」。只能在 rucloud 跑的範例（例如 app-builder 用了 `[dynamic]` 和長時間的 AI 串流）要清楚標出來。
@@ -95,7 +96,7 @@ flowchart LR
 * **靜態網站的三種放法**（文件）：GitHub Pages、Cloudflare、rucloud 主機，以及各自的 DNS 設定。放在 GitHub Pages 的網站用 CNAME 掛在自己的網域下，流量直接走 GitHub、不經過主機；rucloud 只替屬於應用的網域申請憑證，所以不會跟它衝突。
 * **portal 改成統一的作品清單**：同時列出主機上的應用、放在 GitHub Pages 與 Cloudflare 的網站，每張卡片標示放在哪裡、能在哪裡跑，並附原始碼連結。
 
-### 1.9.0 — 兩邊互相搬家
+### 1.10.0 — 兩邊互相搬家
 
 * **D1**：`rucloud d1 export` / `import`，格式和 `wrangler d1 export` 相同（SQL 檔），可以在 Cloudflare 與 rucloud 之間互搬。
 * **KV、R2**：匯出與匯入。R2 已經有 S3 相容 API，先寫文件說明怎麼用 rclone 搬。
