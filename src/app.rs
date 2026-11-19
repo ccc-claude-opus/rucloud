@@ -33,6 +33,8 @@ pub struct App {
     pub dev: bool,
     /// send_email 綁定能不能寄（安裝的應用要有 email 權限）
     pub email_allowed: bool,
+    /// env.AI 能不能用（安裝的應用要有 ai 權限）
+    pub ai_allowed: bool,
     pub http: reqwest::Client,
     pub token: String,
     pub metrics: Arc<crate::observe::Metrics>,
@@ -331,6 +333,7 @@ impl App {
             state,
             dev: ctx.dev,
             email_allowed: grants.as_ref().is_none_or(|g| g.email),
+            ai_allowed: grants.as_ref().is_none_or(|g| g.ai),
             http: ctx.http.clone(),
             token,
             metrics: shared.metrics.clone(),

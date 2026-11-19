@@ -245,7 +245,7 @@ async fn wait_ready(pool: &crate::pool::Pool, slot: &Slot) -> Result<()> {
 /// 執行中新增的應用不能用的綁定：它們會碰到其他應用或伺服器的資源
 ///（佇列與 Analytics 是全域共用的、Hyperdrive 讀伺服器的環境變數、AI 用伺服器的金鑰、service binding 呼叫其他應用）。
 /// 安裝的應用（[install]）可以用佇列與 workflow：佇列名稱加上應用名稱前綴（app.rs 的 installed_queues），
-/// workflow 本來就是每個應用一份；send_email 要安裝程式給 email 權限才能寄
+/// workflow 本來就是每個應用一份；send_email、ai 要安裝程式給 email、ai 權限才能用
 pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler, kind: Kind) -> Result<()> {
     let installed = kind == Kind::Installed;
     let mut bad = Vec::new();
@@ -255,7 +255,7 @@ pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler, kind: Kind) -> R
     if !installed && (!cfg.queues.producers.is_empty() || !cfg.queues.consumers.is_empty()) {
         bad.push("queues");
     }
-    if cfg.ai.is_some() {
+    if !installed && cfg.ai.is_some() {
         bad.push("ai");
     }
     if !cfg.analytics_engine_datasets.is_empty() {

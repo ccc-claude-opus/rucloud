@@ -157,11 +157,13 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         registry.insert(slot.clone(), crate::registry::Kind::Config)?;
     }
     let mailer = Arc::new(crate::email::Mailer::open(&state_root, cfg.email.clone())?);
+    let ai = Arc::new(crate::ai::Ai::open(&state_root, cfg.ai.clone())?);
     let hub = Arc::new(Hub {
         apps: registry.clone(),
         queues: queues.clone(),
         analytics: analytics.clone(),
         mailer: mailer.clone(),
+        ai: ai.clone(),
     });
     // 綁定 API 不參與優雅關閉：還在處理的請求可能需要它，程序結束時才停
     tokio::spawn(async move { axum::serve(bind_listener, bindings::router(hub)).await });
@@ -242,6 +244,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
             deployer: deployer.clone(),
             analytics: analytics.clone(),
             mailer: mailer.clone(),
+            ai: ai.clone(),
         });
         let listener = tokio::net::TcpListener::bind(addr)
             .await

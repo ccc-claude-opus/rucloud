@@ -308,9 +308,21 @@ RPC：`env.AUTH.verify(token)` 呼叫目標應用 default export（`WorkerEntryp
 
 ## Workers AI
 
-`env.AI.run(model, inputs)` 轉給 OpenAI 相容的後端：
+`env.AI.run(model, inputs)` 轉給 OpenAI 相容的後端。後端用 `[ai]` 設定（或管理 API 的 `/ai`），沒有時才看環境變數：
 
-| 環境變數 | 說明 |
+```toml
+[ai]
+base_url = "http://localhost:11434/v1"   # Ollama
+api_key = "…"                            # 可省略
+model = "llama3.2"                       # 可省略；設定後忽略程式碼裡的 @cf/... 名稱
+embedding_model = "nomic-embed-text"     # 可省略
+daily_requests = 500                     # 每個應用每天最多幾次請求（0：不限）
+daily_tokens = 200000                    # 每個應用每天最多幾個 token（0：不限）
+```
+
+管理 API：`GET /ai`（不含金鑰）、`PUT /ai`（JSON，欄位同上；沒給 `api_key` 就沿用原來的）、`DELETE /ai`、`POST /ai/test`（問一句話）、`GET /ai/usage?days=30`（每個應用每天的請求數與 token 數）。改過後存在 `<state_dir>/ai.json`（只有 rucloud 讀得到），以它為準。用量記在 `<state_dir>/ai-usage.sqlite`；串流時要求後端在最後一個事件附上用量（`stream_options.include_usage`），不支援的後端只記請求數。`[install]` 的應用要有 `ai` 權限才能用，`[dynamic]` 的應用不能用。
+
+| 環境變數（沒有 `[ai]` 與 `ai.json` 時） | 說明 |
 |---|---|
 | `RUCLOUD_AI_BASE_URL` | 必填，例如 `http://localhost:11434/v1`（Ollama） |
 | `RUCLOUD_AI_API_KEY` | 可省略 |

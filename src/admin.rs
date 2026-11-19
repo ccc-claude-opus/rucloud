@@ -47,6 +47,7 @@ pub struct Admin {
     pub deployer: Arc<crate::deploy::Deployer>,
     pub analytics: Arc<crate::analytics::Analytics>,
     pub mailer: Arc<crate::email::Mailer>,
+    pub ai: Arc<crate::ai::Ai>,
 }
 
 type S = State<Arc<Admin>>;
@@ -68,6 +69,9 @@ pub fn router(admin: Arc<Admin>) -> Router {
         .route("/stats", get(stats))
         .route("/email", get(get_email).put(put_email).delete(delete_email))
         .route("/email/test", post(test_email))
+        .route("/ai", get(get_ai).put(put_ai).delete(delete_ai))
+        .route("/ai/test", post(test_ai))
+        .route("/ai/usage", get(ai_usage))
         .route("/queues", get(queues))
         .route("/analytics/sql", post(analytics_sql))
         .route("/queues/{queue}/messages", post(queue_send))
@@ -127,8 +131,8 @@ struct InstallScope;
 /// 安裝的應用的 DELETE、GET logs / versions / grants、PUT grants、POST rollback、PUT secrets/<名稱>
 fn install_scope(admin: &Admin, method: &axum::http::Method, path: &str) -> bool {
     use axum::http::Method;
-    // 寄信設定（不含密碼）：安裝程式用來說明 email 權限
-    if path == "/apps" || path == "/email" {
+    // 寄信與 AI 的設定（不含密碼、金鑰）：安裝程式用來說明 email、ai 權限
+    if path == "/apps" || path == "/email" || path == "/ai" {
         return *method == Method::GET;
     }
     let Some(rest) = path.strip_prefix("/apps/") else { return false };
@@ -466,6 +470,46 @@ async fn test_email(State(admin): S, axum::Json(t): axum::Json<TestEmail>) -> Re
     );
     match admin.mailer.send(None, &from, std::slice::from_ref(&t.to), raw.as_bytes()).await {
         Ok(()) => axum::Json(json!({ "ok": true })).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+// ---------- Workers AI 的後端與用量 ----------
+
+async fn get_ai(State(admin): S) -> Response {
+    axum::Json(admin.ai.describe()).into_response()
+}
+
+async fn put_ai(State(admin): S, axum::Json(cfg): axum::Json<crate::ai::AiBackend>) -> Response {
+    match admin.ai.set(cfg) {
+        Ok(()) => axum::Json(admin.ai.describe()).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+async fn delete_ai(State(admin): S) -> Response {
+    admin.ai.clear();
+    axum::Json(admin.ai.describe()).into_response()
+}
+
+/// 用設定的後端問一句話（記在 "(test)" 的用量裡）
+async fn test_ai(State(admin): S) -> Response {
+    let http = reqwest::Client::new();
+    let inputs = json!({ "prompt": "Reply with the single word OK.", "max_tokens": 10 });
+    match crate::ai::run(&admin.ai, &http, "(test)", "@cf/meta/llama-3.1-8b-instruct", &inputs).await {
+        Ok(v) => axum::Json(json!({ "ok": true, "response": v["response"] })).into_response(),
+        Err(e) => fail(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UsageQuery {
+    days: Option<u32>,
+}
+
+async fn ai_usage(State(admin): S, axum::extract::Query(q): axum::extract::Query<UsageQuery>) -> Response {
+    match admin.ai.usage(q.days.unwrap_or(30).clamp(1, 366)) {
+        Ok(rows) => axum::Json(json!({ "usage": rows })).into_response(),
         Err(e) => fail(e),
     }
 }

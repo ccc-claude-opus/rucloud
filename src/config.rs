@@ -395,6 +395,8 @@ pub struct ServeConfig {
     pub install: Option<InstallCfg>,
     /// 寄信（send_email 綁定）用的 SMTP；管理 API 的 /email 改過後以 <state_dir>/email.json 為準
     pub email: Option<crate::email::EmailCfg>,
+    /// Workers AI 的後端（OpenAI 相容）與每個應用每天的上限；管理 API 的 /ai 改過後以 <state_dir>/ai.json 為準
+    pub ai: Option<crate::ai::AiBackend>,
     /// 自己的網域：每個應用自動有 <名稱>.<base>
     pub domain: Option<DomainCfg>,
     /// 信任的反向代理（IP、CIDR，或 "cloudflare"）：只有從這些位址來的請求才採用
@@ -566,6 +568,9 @@ pub struct Grants {
     /// 可以用 send_email 綁定寄信（收件人仍限於寄信設定裡驗證過的地址）
     #[serde(default)]
     pub email: bool,
+    /// 可以用 Workers AI（env.AI）；用的是 [ai] 設定的後端，有每天的上限
+    #[serde(default)]
+    pub ai: bool,
 }
 
 fn install_max() -> usize {

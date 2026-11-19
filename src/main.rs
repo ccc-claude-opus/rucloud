@@ -390,6 +390,7 @@ async fn main() -> Result<()> {
                 dynamic: None,
                 install: None,
                 email: None,
+                ai: None,
                 trusted_proxies: crate::proxy::default_list(),
                 domain: None,
                 tls: match (tls_cert, tls_key) {

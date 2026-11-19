@@ -111,7 +111,7 @@ path = "${systemApp(dir, 'hello')}"
     const created = await admin(adminPort, '/apps/notes?message=1.0', { method: 'PUT', body: pack(notes('1.0', edgePort)) });
     assert.equal(created.status, 201, JSON.stringify(created.body));
     assert.deepEqual((await edge(edgePort, 'notes.localhost', '/')).body, { version: '1.0', env: ['VERSION'] });
-    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false });
+    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false, ai: false });
     const net = (await edge(edgePort, 'notes.localhost', '/net')).body;
     assert.match(net.fetch, /沒有連線到外部網路的權限/);
     assert.match(net.http, /沒有連線到外部網路的權限/);
@@ -179,7 +179,7 @@ path = "${systemApp(dir, 'hello')}"
     // 重新安裝：舊的權限不沿用
     assert.equal((await admin(adminPort, '/apps/second', { method: 'DELETE' })).status, 200);
     assert.equal((await admin(adminPort, '/apps/notes', { method: 'PUT', body: pack(notes('2.0', edgePort)) })).status, 201);
-    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false });
+    assert.deepEqual((await admin(adminPort, '/apps/notes/grants')).body, { services: [], network: false, email: false, ai: false });
   } finally {
     await rc.stop();
   }
@@ -394,5 +394,85 @@ path = "${systemApp(dir, 'installer')}"
   } finally {
     await rc.stop();
     smtp.server.close();
+  }
+});
+
+// Workers AI：後端在管理 API 的 /ai 設定；安裝的應用要有 ai 權限；每個應用每天的用量與上限
+test('Workers AI：ai 權限、後端設定、用量與每天的上限', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rc-ai-'));
+  const fake = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const c of req) body += c;
+    const b = JSON.parse(body);
+    if (b.stream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'hi' } }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [], usage: { total_tokens: 7 } })}\n\n`);
+      return res.end('data: [DONE]\n\n');
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: `model ${b.model}` } }], usage: { total_tokens: 5 } }));
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const [edgePort, adminPort] = [await freePort(), await freePort()];
+  const cfg = join(dir, 'rucloud.toml');
+  writeFileSync(cfg, `state_dir = "${join(dir, 'state')}"
+[edge]
+port = ${edgePort}
+[admin]
+port = ${adminPort}
+bind = "127.0.0.1"
+token = "${ADMIN_TOKEN}"
+[install]
+token = "${INSTALL_TOKEN}"
+grant = ["installer"]
+[[app]]
+path = "${systemApp(dir, 'installer')}"
+`);
+  const rc = await start({ args: ['serve', cfg], ready: `http://127.0.0.1:${adminPort}/apps` });
+  const writer = {
+    'wrangler.jsonc': JSON.stringify({ name: 'x', main: 'src/worker.js', ai: { binding: 'AI' } }),
+    'src/worker.js': `export default {
+      async fetch(request, env) {
+        try {
+          if (new URL(request.url).pathname === '/stream') return new Response(await env.AI.run('@cf/x', { prompt: 'hi', stream: true }));
+          return new Response((await env.AI.run('@cf/meta/llama-3.1-8b-instruct', { prompt: 'hi' })).response);
+        } catch (e) {
+          return new Response(e.message, { status: 500 });
+        }
+      },
+    };`,
+  };
+  const get = async (path = '/') => {
+    const r = await edge(edgePort, 'writer.localhost', path);
+    return `${r.status} ${typeof r.body === 'string' ? r.body : JSON.stringify(r.body)}`;
+  };
+  try {
+    assert.equal((await admin(adminPort, '/apps/writer', { method: 'PUT', body: pack(writer) })).status, 201);
+    assert.match(await get(), /500 .*沒有使用 AI 的權限/);
+    assert.equal((await admin(adminPort, '/apps/writer/grants', { method: 'PUT', json: { ai: true } })).status, 200);
+    assert.match(await get(), /500 .*還沒設定 AI 的後端/);
+    // 只有完整的管理 token 能設定；不回傳金鑰
+    const backend = { base_url: `http://127.0.0.1:${fake.address().port}/v1`, api_key: 'sk-secret', model: 'local-model', daily_requests: 3 };
+    assert.equal((await admin(adminPort, '/ai', { method: 'PUT', json: backend })).status, 403, 'install token');
+    const set = await admin(adminPort, '/ai', { method: 'PUT', json: backend, token: ADMIN_TOKEN });
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal(set.body.has_api_key, true);
+    assert.equal(JSON.stringify(set.body).includes('sk-secret'), false);
+    assert.equal((await admin(adminPort, '/ai')).body.model, 'local-model', 'install token can read');
+    // 設定的模型取代程式碼裡的 @cf/ 名稱；用量記在應用名下；串流的用量從最後一個事件取
+    assert.equal(await get(), '200 model local-model');
+    assert.match(await get('/stream'), /200 data: \{"response":"hi"\}/);
+    const usage = (await admin(adminPort, '/ai/usage', { token: ADMIN_TOKEN })).body.usage;
+    assert.deepEqual(usage.map((u) => [u.app, u.requests, u.tokens]), [['writer', 2, 12]]);
+    // 每天的上限（3 次）
+    assert.equal(await get(), '200 model local-model');
+    assert.match(await get(), /500 .*今天的 AI 請求已達上限（3 次）/);
+    // 測試一句話
+    const t = await admin(adminPort, '/ai/test', { method: 'POST', token: ADMIN_TOKEN });
+    assert.equal(t.body.response, 'model local-model');
+  } finally {
+    await rc.stop();
+    fake.close();
   }
 });
