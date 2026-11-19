@@ -63,6 +63,12 @@ impl Queues {
         Ok(messages.len())
     }
 
+    /// 刪掉名稱以 prefix 開頭的佇列的所有訊息（移除安裝的應用時）
+    pub fn purge_prefix(&self, prefix: &str) -> Result<usize> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.execute("DELETE FROM messages WHERE substr(queue, 1, ?1) = ?2", params![prefix.chars().count() as i64, prefix])?)
+    }
+
     /// 每個佇列的訊息數（含延遲中、處理中的），給 /metrics 用
     pub fn depth(&self) -> Vec<(String, i64)> {
         let conn = self.conn.lock().unwrap();

@@ -81,10 +81,10 @@ impl Deployer {
     /// 收一個 tar.gz，解到新的版本資料夾。檢查 wrangler 設定讀得起來才算數
     pub fn store(&self, app: &str, tar_gz: &[u8], message: &str) -> Result<Version> {
         let slot = self.slot(app)?;
-        self.store_version(app, slot.entry.env.as_deref(), self.registry.kind(app).restricted(), tar_gz, message)
+        self.store_version(app, slot.entry.env.as_deref(), self.registry.kind(app), tar_gz, message)
     }
 
-    fn store_version(&self, app: &str, env: Option<&str>, dynamic: bool, tar_gz: &[u8], message: &str) -> Result<Version> {
+    fn store_version(&self, app: &str, env: Option<&str>, kind: Kind, tar_gz: &[u8], message: &str) -> Result<Version> {
         let id = format!("{}-{:04x}", chrono::Utc::now().format("%Y%m%d-%H%M%S"), rand::random::<u16>());
         let root = versions_dir(&self.ctx, app);
         let tmp = root.join(format!(".{id}.tmp"));
@@ -118,8 +118,8 @@ impl Deployer {
                 }
             }
             let cfg = crate::config::load_wrangler(&tmp, env).context("上傳的版本裡的 wrangler 設定有問題")?;
-            if dynamic {
-                check_dynamic(&tmp, &cfg)?;
+            if kind.restricted() {
+                check_dynamic(&tmp, &cfg, kind)?;
             }
             Ok((files, bytes))
         })();
@@ -243,13 +243,16 @@ async fn wait_ready(pool: &crate::pool::Pool, slot: &Slot) -> Result<()> {
 // ---------- 執行中新增的應用（[dynamic]） ----------
 
 /// 執行中新增的應用不能用的綁定：它們會碰到其他應用或伺服器的資源
-///（佇列與 Analytics 是全域共用的、Hyperdrive 讀伺服器的環境變數、AI 用伺服器的金鑰、service binding 呼叫其他應用）
-pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler) -> Result<()> {
+///（佇列與 Analytics 是全域共用的、Hyperdrive 讀伺服器的環境變數、AI 用伺服器的金鑰、service binding 呼叫其他應用）。
+/// 安裝的應用（[install]）可以用佇列與 workflow：佇列名稱加上應用名稱前綴（app.rs 的 installed_queues），
+/// workflow 本來就是每個應用一份
+pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler, kind: Kind) -> Result<()> {
+    let installed = kind == Kind::Installed;
     let mut bad = Vec::new();
     if !cfg.services.is_empty() {
         bad.push("services");
     }
-    if !cfg.queues.producers.is_empty() || !cfg.queues.consumers.is_empty() {
+    if !installed && (!cfg.queues.producers.is_empty() || !cfg.queues.consumers.is_empty()) {
         bad.push("queues");
     }
     if cfg.ai.is_some() {
@@ -261,7 +264,7 @@ pub fn check_dynamic(dir: &Path, cfg: &crate::config::Wrangler) -> Result<()> {
     if !cfg.hyperdrive.is_empty() {
         bad.push("hyperdrive");
     }
-    if !cfg.workflows.is_empty() {
+    if !installed && !cfg.workflows.is_empty() {
         bad.push("workflows");
     }
     if !bad.is_empty() {
@@ -499,7 +502,7 @@ impl Deployer {
         let before = manifest(&self.ctx, name);
         let result = async {
             let (me, n) = (self.clone_handle(), name.to_string());
-            let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, kind.restricted(), &tar_gz, &message)).await??;
+            let v = tokio::task::spawn_blocking(move || me.store_version(&n, None, kind, &tar_gz, &message)).await??;
             let code = versions_dir(&self.ctx, name).join(&v.id);
             let ctx = self.ctx.clone();
             let slot = tokio::task::spawn_blocking(move || Slot::create(&entry, &ctx, &code)).await??;
@@ -536,7 +539,7 @@ impl Deployer {
 
     fn start_app(&self, slot: &Arc<Slot>, kind: Kind) {
         restart_background(slot, &slot.get(), &self.queues);
-        if !kind.restricted() {
+        if kind != Kind::Dynamic {
             let (s, stop) = (slot.clone(), slot.stopped.clone());
             tokio::spawn(async move {
                 tokio::select! {
@@ -569,6 +572,10 @@ impl Deployer {
             // 等 Worker 程序真的結束，再刪資料夾
             tokio::time::sleep(Duration::from_millis(300)).await;
             std::fs::remove_dir_all(self.ctx.state_root.join(name))?;
+            if kind == Kind::Installed {
+                // 它的佇列（`<app>:<queue>`）裡還沒處理的訊息
+                self.queues.purge_prefix(&format!("{name}:"))?;
+            }
         }
         tracing::info!("[{name}] 已刪除{}", if purge { "（含資料）" } else { "" });
         Ok(())

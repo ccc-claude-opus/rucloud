@@ -101,6 +101,26 @@ pub fn app_name(entry: &AppEntry) -> Result<String> {
         .unwrap_or_else(|| dir.file_name().unwrap().to_string_lossy().into_owned()))
 }
 
+/// 安裝的應用的佇列名稱加上 `<應用>:`（生產者、消費者、死信佇列、R2 事件通知），
+/// 所以它只碰得到自己的佇列；Worker 程式碼裡的綁定名稱不變
+pub fn installed_queues(cfg: &mut config::Wrangler, app: &str) {
+    let own = |q: &mut String| *q = format!("{app}:{q}");
+    for p in &mut cfg.queues.producers {
+        own(&mut p.queue);
+    }
+    for c in &mut cfg.queues.consumers {
+        own(&mut c.queue);
+        if let Some(d) = &mut c.dead_letter_queue {
+            own(d);
+        }
+    }
+    for b in &mut cfg.r2_buckets {
+        for n in &mut b.event_notifications {
+            own(&mut n.queue);
+        }
+    }
+}
+
 /// 這個 Node 的權限模型是否也管網路（Node 25 起有 --allow-net）
 fn node_has_net_permission(node: &str) -> bool {
     static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, bool>>> = std::sync::OnceLock::new();
@@ -156,6 +176,10 @@ impl App {
         let grants = entry.installed.then(|| crate::deploy::load_grants(&ctx.state_root, name));
         if let Some(g) = &grants {
             cfg.services.extend(g.services.iter().cloned());
+        }
+        if entry.installed {
+            // queue names are machine-wide: an installed app's are its own, `<app>:<queue>`
+            installed_queues(&mut cfg, name);
         }
         for (key, why) in config::unsupported_keys(&dir, entry.env.as_deref()) {
             tracing::warn!("[{name}] wrangler 設定的 {key}：{why}");

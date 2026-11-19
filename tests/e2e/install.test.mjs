@@ -183,3 +183,91 @@ path = "${systemApp(dir, 'hello')}"
     await rc.stop();
   }
 });
+
+// 安裝的應用可以用 Queues 與 Workflows：佇列名稱是應用自己的（`<應用>:<佇列>`），別的應用送不進來；
+// 移除（purge）時佇列裡的訊息一起清掉
+const jobs = {
+  'wrangler.jsonc': JSON.stringify({
+    name: 'whatever',
+    main: 'src/worker.js',
+    kv_namespaces: [{ binding: 'KV', id: 'kv' }],
+    queues: { producers: [{ binding: 'Q', queue: 'tasks' }], consumers: [{ queue: 'tasks', max_batch_timeout: 0 }] },
+    workflows: [{ name: 'flow', binding: 'FLOW', class_name: 'Flow' }],
+  }),
+  'src/worker.js': `import { WorkflowEntrypoint } from 'cloudflare:workers';
+  export class Flow extends WorkflowEntrypoint {
+    async run(event, step) {
+      return await step.do('double', async () => event.payload.n * 2);
+    }
+  }
+  export default {
+    async fetch(request, env) {
+      const u = new URL(request.url);
+      if (u.pathname === '/send') { await env.Q.send({ text: u.searchParams.get('text') }); return new Response('ok'); }
+      if (u.pathname === '/last') return Response.json({ last: await env.KV.get('last') });
+      if (u.pathname === '/wf') return Response.json({ id: (await env.FLOW.create({ params: { n: 21 } })).id });
+      if (u.pathname === '/wf/status') return Response.json(await (await env.FLOW.get(u.searchParams.get('id'))).status());
+      return new Response('jobs');
+    },
+    async queue(batch, env) {
+      for (const m of batch.messages) await env.KV.put('last', m.body.text);
+    },
+  };`,
+};
+
+test('安裝的應用：Queues 與 Workflows 各自一份', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'rc-inst-q-'));
+  const [edgePort, adminPort] = [await freePort(), await freePort()];
+  const cfg = join(dir, 'rucloud.toml');
+  writeFileSync(cfg, `state_dir = "${join(dir, 'state')}"
+[edge]
+port = ${edgePort}
+[admin]
+port = ${adminPort}
+bind = "127.0.0.1"
+token = "${ADMIN_TOKEN}"
+[install]
+token = "${INSTALL_TOKEN}"
+grant = ["installer"]
+[[app]]
+path = "${systemApp(dir, 'installer')}"
+`);
+  const rc = await start({ args: ['serve', cfg], ready: `http://127.0.0.1:${adminPort}/apps`});
+  const until = async (fn, what) => {
+    for (let i = 0; i < 100; i++) {
+      const v = await fn();
+      if (v) return v;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.fail(`等不到${what}`);
+  };
+  const depth = async () => (await admin(adminPort, '/metrics', { token: ADMIN_TOKEN })).body;
+  try {
+    const put = (name, files) => admin(adminPort, `/apps/${name}`, { method: 'PUT', body: pack(files) });
+    assert.equal((await put('jobs', jobs)).status, 201);
+    // 另一個應用用同樣的佇列名稱、沒有消費者：它的訊息留在自己的佇列裡，到不了 jobs
+    const other = { ...jobs, 'wrangler.jsonc': JSON.stringify({ ...JSON.parse(jobs['wrangler.jsonc']), queues: { producers: [{ binding: 'Q', queue: 'tasks' }] }, workflows: [] }) };
+    assert.equal((await put('other', other)).status, 201);
+
+    assert.equal((await edge(edgePort, 'jobs.localhost', '/send?text=hello')).status, 200);
+    await until(async () => (await edge(edgePort, 'jobs.localhost', '/last')).body.last === 'hello', ' jobs 的消費者');
+    assert.equal((await edge(edgePort, 'other.localhost', '/send?text=evil')).status, 200);
+    await until(async () => /queue="other:tasks"} 1/.test(await depth()), ' other:tasks 的訊息');
+    await new Promise((r) => setTimeout(r, 500));
+    assert.equal((await edge(edgePort, 'jobs.localhost', '/last')).body.last, 'hello', '別的應用的訊息不會送到 jobs');
+
+    // Workflows
+    const { id } = (await edge(edgePort, 'jobs.localhost', '/wf')).body;
+    const st = await until(async () => {
+      const s = (await edge(edgePort, 'jobs.localhost', `/wf/status?id=${id}`)).body;
+      return s.status === 'complete' && s;
+    }, ' workflow 完成');
+    assert.equal(st.output, 42);
+
+    // 移除（含資料）時清掉它佇列裡的訊息
+    assert.equal((await admin(adminPort, '/apps/other?purge=true', { method: 'DELETE' })).status, 200);
+    assert.doesNotMatch(await depth(), /queue="other:tasks"} [1-9]/);
+  } finally {
+    await rc.stop();
+  }
+});

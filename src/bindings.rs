@@ -408,7 +408,12 @@ async fn mpu_abort(State(hub): S, Path((app, binding)): Path<(String, String)>, 
 
 // ---------- Queues、Rate limiting ----------
 
-async fn queue_send(State(hub): S, Path((_app, queue)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+async fn queue_send(State(hub): S, Path((app, queue)): Path<(String, String)>, Json(body): Json<Value>) -> R<Json<Value>> {
+    // only to the queues the app produces to (its wrangler config), not to any name
+    let app = hub.app(&app)?;
+    if !app.cfg.queues.producers.iter().any(|p| p.queue == queue) {
+        return Err(ApiError(StatusCode::FORBIDDEN, format!("{} 沒有佇列 {queue} 的生產者綁定", app.name)));
+    }
     let queues = hub.queues.clone();
     let msgs = body["messages"].as_array().cloned().unwrap_or_default();
     let n = blocking(move || queues.send(&queue, &msgs)).await?;
