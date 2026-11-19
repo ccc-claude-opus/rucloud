@@ -190,6 +190,28 @@ for (const row of this.ctx.storage.sql.exec('SELECT * FROM messages')) { … }
 
 `upsert`、`insert`、`query(vector, {topK, returnValues, returnMetadata, namespace, filter})`、`getByIds`、`deleteByIds`、`describe`。`filter` 支援 `$eq $ne $in $nin $lt $lte $gt $gte`。度量方式在 wrangler 設定裡用 rucloud 擴充欄位 `"metric": "cosine" | "euclidean" | "dot-product"`（預設 cosine）。查詢是精確搜尋（不是近似），多執行緒掃描整個索引：10 萬筆 768 維約 13 ms（Apple Silicon）。百萬筆以上建議改用專門的向量資料庫。
 
+## Images
+
+`"images": { "binding": "IMAGES" }`。在 rucloud 裡用 Rust 的 image crate 處理，不連到外部：
+
+```js
+const info = await env.IMAGES.info(stream); // { format, fileSize, width, height }
+const res = (await env.IMAGES.input(stream)
+  .transform({ width: 320, fit: 'cover', gravity: 'top' })
+  .draw(env.IMAGES.input(logo).transform({ width: 64 }), { bottom: 8, right: 8, opacity: 0.8 })
+  .output({ format: 'image/webp' })).response();
+```
+
+| 項目 | 支援 |
+|---|---|
+| 讀 | PNG、JPEG、WebP、GIF（第一格）；SVG 只有 `info` 回報格式 |
+| `transform` | `width`、`height`、`fit`（`scale-down` 預設、`contain`、`cover`、`crop`、`pad`、`squeeze`）、`gravity`（`left` `right` `top` `bottom` `center` 或 `{x, y}`）、`background`、`rotate`（90 的倍數）、`flip`（`h` `v` `hv`）、`blur`、`brightness`、`contrast`；同一次 `transform` 的順序是旋轉、翻轉、縮放、模糊、亮度、對比 |
+| `draw` | 疊圖與 `top` `left` `bottom` `right` `opacity`；沒有 `repeat` |
+| `output` | `image/jpeg`（`quality`）、`image/png`、`image/webp`（只有無損）、`image/gif`、`rgb`、`rgba`；**不能輸出 AVIF** |
+| 結果 | `response()`、`image()`、`contentType()` |
+
+寬高上限 12000 px。沒有 `trim`、`sharpen`、`gamma`、`saturation`、`dpr` 等其他參數（會被忽略）。
+
 ## Rate Limiting
 
 ```jsonc

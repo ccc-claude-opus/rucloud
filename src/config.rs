@@ -24,6 +24,7 @@ pub struct Wrangler {
     pub durable_objects: DurableObjectsCfg,
     pub vectorize: Vec<VectorizeCfg>,
     pub ai: Option<AiCfg>,
+    pub images: Option<ImagesCfg>,
     pub ratelimits: Vec<RateLimitCfg>,
     pub services: Vec<ServiceCfg>,
     pub migrations: Vec<MigrationCfg>,
@@ -207,6 +208,11 @@ pub struct AiCfg {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct ImagesCfg {
+    pub binding: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct RateLimitCfg {
     pub name: String,
     pub simple: RateLimitSimple,
@@ -240,6 +246,7 @@ const NON_INHERITABLE: &[&str] = &[
     "services",
     "vectorize",
     "ai",
+    "images",
     "ratelimits",
 ];
 
@@ -260,7 +267,6 @@ pub const UNSUPPORTED: &[(&str, &str)] = &[
     ("unsafe", "不支援 unsafe 綁定"),
     ("containers", "不支援 Containers"),
     ("browser", "不支援 Browser Rendering"),
-    ("images", "不支援 Images"),
     ("send_email", "不支援 Email Workers"),
     ("dispatch_namespaces", "不支援 Workers for Platforms"),
     ("mtls_certificates", "不支援 mTLS 憑證綁定"),

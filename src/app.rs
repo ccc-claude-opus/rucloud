@@ -238,6 +238,7 @@ impl App {
             "queues": cfg.queues.producers.iter().map(|p| json!({ "binding": p.binding, "queue": p.queue })).collect::<Vec<_>>(),
             "durableObjects": cfg.durable_objects.bindings.iter().map(|d| json!({ "binding": d.name, "className": d.class_name })).collect::<Vec<_>>(),
             "vectorize": cfg.vectorize.iter().map(|v| &v.binding).collect::<Vec<_>>(),
+            "images": cfg.images.as_ref().map(|i| &i.binding),
             "ratelimits": cfg.ratelimits.iter().map(|r| &r.name).collect::<Vec<_>>(),
             "services": cfg.services.iter().map(|s| &s.binding).collect::<Vec<_>>(),
             "installed": entry.installed,

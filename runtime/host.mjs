@@ -1,7 +1,7 @@
 // rucloud 的 Worker 執行環境（跑在 Node.js 裡，由 rucloud 啟動與監管）
 //
 //   * 載入應用的 main 模組（export default { fetch, queue, scheduled }）
-//   * 建立 env：D1 / KV / R2 / Queues / Durable Objects / Vectorize / AI / 限流 / ASSETS / service，
+//   * 建立 env：D1 / KV / R2 / Queues / Durable Objects / Vectorize / Images / AI / 限流 / ASSETS / service，
 //     全部是呼叫 rucloud（Rust）綁定 API 的薄包裝
 //   * 在 127.0.0.1 的隨機埠聽 HTTP，啟動好後在 stdout 印 `RUCLOUD_READY <port>`
 //
@@ -1145,6 +1145,57 @@ class VectorizeIndex {
   describe() { return this._op('describe', {}); }
 }
 
+// Images：在 rucloud 裡處理（縮放、裁切、旋轉、疊圖，輸出 JPEG / PNG / WebP / GIF）
+async function imageBytes(input, options = {}) {
+  let bytes;
+  if (input instanceof ImageTransformer) return new Uint8Array(await (await input.output({ format: 'image/png' }))._bytes);
+  if (input instanceof ReadableStream || input instanceof Response || input instanceof Blob) bytes = new Uint8Array(await new Response(input).arrayBuffer());
+  else if (input instanceof ArrayBuffer) bytes = new Uint8Array(input);
+  else if (ArrayBuffer.isView(input)) bytes = new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  else throw new TypeError('Images：圖片要是 ReadableStream、ArrayBuffer 或 Blob');
+  if (options.encoding === 'base64') bytes = new Uint8Array(Buffer.from(new TextDecoder().decode(bytes), 'base64'));
+  return bytes;
+}
+
+class ImageTransformationResult {
+  constructor(bytes, type) { this._bytes = bytes; this._type = type; }
+  contentType() { return this._type; }
+  image() { return new Response(this._bytes).body; }
+  response() { return new Response(this._bytes, { headers: { 'content-type': this._type } }); }
+}
+
+class ImageTransformer {
+  constructor(input, options) { this._input = input; this._options = options; this._steps = []; }
+  transform(t = {}) { this._steps.push({ ...t }); return this; }
+  draw(image, options = {}) {
+    if (options.repeat) throw new Error('rucloud 的 Images 不支援 draw 的 repeat');
+    this._steps.push({ overlay: { ...options, image } });
+    return this;
+  }
+  async output(options = {}) {
+    const image = toB64(await imageBytes(this._input, this._options));
+    const steps = [];
+    for (const s of this._steps) steps.push(s.overlay ? { overlay: { ...s.overlay, image: toB64(await imageBytes(s.overlay.image)) } } : s);
+    const res = await nativeFetch(`${B}/images/transform`, {
+      method: 'POST',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      body: JSON.stringify({ image, steps, output: options }),
+    });
+    if (!res.ok) await readJson(res);
+    return new ImageTransformationResult(new Uint8Array(await res.arrayBuffer()), res.headers.get('content-type'));
+  }
+}
+
+function makeImages() {
+  return {
+    async info(input, options) {
+      const res = await nativeFetch(`${B}/images/info`, { method: 'POST', headers: AUTH, body: await imageBytes(input, options) });
+      return readJson(res);
+    },
+    input(input, options) { return new ImageTransformer(input, options); },
+  };
+}
+
 function makeAi() {
   return {
     async run(model, inputs, options = {}) {
@@ -1370,6 +1421,7 @@ function buildEnv() {
   for (const q of spec.queues) env[q.binding] = new Queue(q.queue);
   for (const d of spec.durableObjects) env[d.binding] = new DurableObjectNamespace(d.binding);
   for (const b of spec.vectorize) env[b] = new VectorizeIndex(b);
+  if (spec.images) env[spec.images] = makeImages();
   for (const b of spec.ratelimits) env[b] = makeRateLimiter(b);
   for (const b of spec.services) env[b] = makeService(b);
   for (const w of spec.workflows || []) env[w.binding] = new WorkflowBinding(w.name);

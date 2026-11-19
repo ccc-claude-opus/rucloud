@@ -82,3 +82,54 @@ test('npm 套件：node_modules 裡的套件照 wrangler 的 exports 條件（wo
     rmSync(app, { recursive: true, force: true });
   }
 });
+
+test('Images 綁定：info、transform、draw、output', async () => {
+  const app = mkdtempSync(join(tmpdir(), 'rc-img-'));
+  const files = {
+    'wrangler.jsonc': JSON.stringify({ name: 'imgapp', main: 'src/index.js', images: { binding: 'IMAGES' } }),
+    'src/index.js': `export default {
+      async fetch(req, env) {
+        const u = new URL(req.url);
+        const src = () => new Response(req.body).body;
+        if (u.pathname === '/info') return Response.json(await env.IMAGES.info(src()));
+        if (u.pathname === '/thumb') {
+          const r = await env.IMAGES.input(src()).transform({ width: 2 }).transform({ rotate: 90 }).output({ format: 'image/webp' });
+          return r.response();
+        }
+        if (u.pathname === '/draw') {
+          const body = new Uint8Array(await req.arrayBuffer());
+          const r = await env.IMAGES.input(body).draw(env.IMAGES.input(body).transform({ width: 2, fit: 'squeeze', height: 2 }), { top: 0, left: 0 }).output({ format: 'image/png' });
+          return Response.json(await env.IMAGES.info(r.image()));
+        }
+        if (u.pathname === '/avif') {
+          try { await env.IMAGES.input(src()).output({ format: 'image/avif' }); return new Response('no error'); } catch (e) { return new Response(e.message, { status: 400 }); }
+        }
+        return new Response('?', { status: 404 });
+      },
+    };`,
+  };
+  for (const [p, c] of Object.entries(files)) {
+    mkdirSync(join(app, p, '..'), { recursive: true });
+    writeFileSync(join(app, p), c);
+  }
+  // 4×2 的 PNG：左半紅、右半藍
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAE0lEQVR4nGP4z8AARGDiPwMyBwBnsgf5Q2OaZwAAAABJRU5ErkJggg==', 'base64');
+  const port = await freePort();
+  const rc = await start({ args: ['dev', app, '--port', String(port), '--state', join(app, '.state')], ready: `http://127.0.0.1:${port}/` });
+  const post = (path) => fetch(`http://127.0.0.1:${port}${path}`, { method: 'POST', body: png });
+  try {
+    assert.deepEqual(await (await post('/info')).json(), { format: 'image/png', fileSize: png.length, width: 4, height: 2 });
+    const thumb = await post('/thumb');
+    assert.equal(thumb.headers.get('content-type'), 'image/webp');
+    const bytes = Buffer.from(await thumb.arrayBuffer());
+    assert.equal(bytes.subarray(8, 12).toString(), 'WEBP');
+    const drawn = await (await post('/draw')).json();
+    assert.deepEqual([drawn.format, drawn.width, drawn.height], ['image/png', 4, 2]);
+    const avif = await post('/avif');
+    assert.equal(avif.status, 400);
+    assert.match(await avif.text(), /AVIF/);
+  } finally {
+    await rc.stop();
+    rmSync(app, { recursive: true, force: true });
+  }
+});

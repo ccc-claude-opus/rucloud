@@ -33,6 +33,7 @@ mod server;
 mod tls;
 mod types;
 mod vectorize;
+mod images;
 mod workflows;
 mod ws;
 

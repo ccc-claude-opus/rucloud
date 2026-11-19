@@ -128,7 +128,6 @@ flowchart LR
 * **多台機器**：多台共用狀態、Durable Object 的跨機器路由。
 * **Containers**：Cloudflare Containers 的對應（rucloud 本來就在 Docker 裡，可以由 Worker 啟動容器）。
 * **Browser Rendering**：接本機的 Chromium（Puppeteer / Playwright 相容介面）。
-* **Images**：圖片縮放、轉檔。
 
 ## 不打算做的
 

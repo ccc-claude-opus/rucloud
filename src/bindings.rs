@@ -77,6 +77,8 @@ pub fn router(hub: Arc<Hub>) -> Router {
         .route("/b/{app}/do-storage/{ns}/{id}", post(do_storage))
         .route("/b/{app}/do/{ns}/{id}/{op}", any(do_forward))
         .route("/b/{app}/vectorize/{binding}/{op}", post(vectorize))
+        .route("/b/{app}/images/info", post(images_info))
+        .route("/b/{app}/images/transform", post(images_transform))
         .route("/b/{app}/ai/run", post(ai_run))
         .route("/b/{app}/assets", any(assets))
         .route("/b/{app}/cache/{name}", get(cache_get).put(cache_put).delete(cache_delete))
@@ -456,6 +458,40 @@ async fn do_forward(State(hub): S, Path((app, ns, id, op)): Path<(String, String
         ("x-rucloud-do-id", id.clone()),
     ];
     Ok(crate::gateway::forward(&app, Some(App::do_affinity(&id)), req, &extra, false).await?)
+}
+
+// ---------- Images ----------
+
+fn images_app(hub: &Hub, app: &str) -> R<()> {
+    let app = hub.app(app)?;
+    if app.cfg.images.is_none() {
+        return Err(ApiError(StatusCode::FORBIDDEN, format!("{} 沒有 Images 綁定", app.name)));
+    }
+    Ok(())
+}
+
+async fn images_info(State(hub): S, Path(app): Path<String>, body: Bytes) -> R<Json<Value>> {
+    images_app(&hub, &app)?;
+    blocking(move || crate::images::info(&body)).await.map(Json)
+}
+
+#[derive(Deserialize)]
+struct ImagesReq {
+    /// base64
+    image: String,
+    steps: Vec<crate::images::Transform>,
+    output: crate::images::Output,
+}
+
+async fn images_transform(State(hub): S, Path(app): Path<String>, Json(req): Json<ImagesReq>) -> R<Response> {
+    images_app(&hub, &app)?;
+    let (out, ct) = blocking(move || {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.decode(&req.image)?;
+        crate::images::transform(&data, &req.steps, &req.output)
+    })
+    .await?;
+    Ok(([(header::CONTENT_TYPE, ct)], out).into_response())
 }
 
 // ---------- Vectorize、AI ----------

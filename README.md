@@ -1,6 +1,6 @@
 # rucloud
 
-**A self-hostable Cloudflare-Workers-like platform.** The Rust core handles the edge gateway (HTTP/HTTPS, WebSocket), static assets and every data binding — D1, KV, R2 (with an S3-compatible API), Queues, Cron, Durable Objects (incl. SQLite storage), Workflows, Vectorize, Analytics Engine, Rate Limiting, Workers AI and AI Gateway. Worker JavaScript/TypeScript runs unmodified on Node.js. Point it at a folder with a `wrangler.jsonc` or `wrangler.toml` and it runs.
+**A self-hostable Cloudflare-Workers-like platform.** The Rust core handles the edge gateway (HTTP/HTTPS, WebSocket), static assets and every data binding — D1, KV, R2 (with an S3-compatible API), Queues, Cron, Durable Objects (incl. SQLite storage), Workflows, Vectorize, Images, Analytics Engine, Rate Limiting, Workers AI and AI Gateway. Worker JavaScript/TypeScript runs unmodified on Node.js. Point it at a folder with a `wrangler.jsonc` or `wrangler.toml` and it runs.
 
 自架的 Cloudflare Workers 平台：**Rust 寫基礎建設、Node.js 跑 Worker 程式碼**。拿現成的 wrangler 專案（`wrangler.jsonc` 或 `wrangler.toml`、JS 或 TypeScript、`public/`），不改一行就能在自己的機器或 Docker 上跑。
 
