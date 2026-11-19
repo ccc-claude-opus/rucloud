@@ -2,7 +2,7 @@
 
 ## 未發佈
 
-* **作業系統層級的隔離**（`[isolation]`，Linux）：`[install]`、`[dynamic]` 的應用（以及設定了 `isolate = true` 的應用）的 Worker 放進 bubblewrap 的籠子：自己的 mount、pid、ipc、uts、network namespace，只看得到執行環境、自己的程式碼與 Durable Object 資料夾；連外只能經過 rucloud 的出口代理（只放行網際網路上的位址）；rucloud 是 root 時換成沒有權限的使用者；cgroup v2 限制記憶體、CPU 與程序數。預設 `mode = "auto"`：有 bwrap 就用。
+* **作業系統層級的隔離**（`[isolation]`，Linux）：`[install]`、`[dynamic]` 的應用（以及設定了 `isolate = true` 的應用）的 Worker 放進 bubblewrap 的籠子：自己的 mount、pid、ipc、uts、network namespace，只看得到執行環境、自己的程式碼與 Durable Object 資料夾；連外只能經過 rucloud 的出口代理（只放行網際網路上的位址）；rucloud 是 root 時換成沒有權限的使用者；cgroup v2 限制記憶體、CPU 與程序數；seccomp 擋掉 Worker 用不到的系統呼叫（ptrace、mount、bpf、io_uring…），籠子裡不能再建 namespace。預設 `mode = "auto"`：有 bwrap 就用。
 * rucloud 與 Worker 程序之間改用 Unix socket（閘道 → Worker、Worker → 綁定 API、WebSocket 轉接），不再用 `127.0.0.1` 的 TCP 埠；為之後把 Worker 放進作業系統層級的隔離（network namespace）做準備。
 * **Workers AI 的設定與用量**：後端可以在 `[ai]` 或管理 API 的 `/ai` 設定（`base_url`、`api_key`、`model`、`embedding_model`），每個應用每天的請求數與 token 數記下來（`GET /ai/usage`），可以設每天的上限（`daily_requests`、`daily_tokens`）；環境變數 `RUCLOUD_AI_*` 仍然可以用。`[install]` 的應用給 `ai` 權限後可以用 `env.AI`。修正：沒有 AI 綁定的應用也能直接呼叫綁定 API 的 `/ai/run`。
 * **Images**（`env.IMAGES`）：`info`、`input().transform().draw().output()`，縮放（各種 `fit`、`gravity`）、旋轉、翻轉、模糊、亮度、對比、疊圖，輸出 JPEG、PNG、WebP（無損）、GIF；用 Rust 的 image crate 在 rucloud 裡做。不能輸出 AVIF。

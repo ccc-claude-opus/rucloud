@@ -225,7 +225,8 @@ curl -X DELETE -H "Authorization: Bearer $RUCLOUD_INSTALL_TOKEN" "$RUCLOUD_ADMIN
 |---|---|
 | 檔案 | 自己的 mount namespace：只看得到系統的 `/usr`、`/lib`、rucloud 的執行環境、應用自己的程式碼（唯讀）與 Durable Object 資料夾（可寫），`/tmp` 是有大小上限的 tmpfs。別的應用的資料、`rucloud.toml`、`/etc/passwd` 都不存在 |
 | 網路 | 自己的 network namespace：只有自己的 `lo`。和 rucloud 之間只靠 Unix socket（綁定 API、這個程序池的資料夾）；連外經過 rucloud 的**出口代理**（`HTTP(S)_PROXY`），在籠子外面查 DNS，本機、私有網路、CGNAT、連結本地位址一律拒絕。沒有 `network` 權限的安裝應用沒有出口代理 |
-| 程序 | 自己的 pid、ipc、uts namespace；`--cap-drop ALL`、`--die-with-parent`、`--new-session` |
+| 程序 | 自己的 pid、ipc、uts namespace；`--cap-drop ALL`、`--die-with-parent`、`--new-session`；不能再建 user namespace（`--disable-userns`，也就建不了其他 namespace） |
+| 系統呼叫 | seccomp 黑名單：`ptrace`、`mount`、`bpf`、`keyctl`、`userfaultfd`、`perf_event_open`、`io_uring`、載入核心模組、`kexec` 等 Worker 用不到的一律回 `EPERM` |
 | 使用者 | rucloud 是 root 時，Worker 先換成 `user`（預設 `rucloud-worker`，要先 `useradd -r rucloud-worker`） |
 | 資源 | 有 cgroup v2 時每個應用一個 cgroup（rucloud 自己的 cgroup 底下的 `workers/<應用>`）：記憶體（`memory_mb`）、CPU、程序數上限。systemd 的服務要加 `Delegate=yes` |
 

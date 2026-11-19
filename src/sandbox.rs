@@ -58,7 +58,61 @@ pub struct Sandbox {
     pub user: Option<(u32, u32)>,
     /// cgroup v2：每個應用一個子 cgroup 的上層資料夾
     cgroups: Option<PathBuf>,
+    /// seccomp 的 BPF 程式檔（bwrap --seccomp 讀它）
+    seccomp: Option<CString>,
     cfg: IsolationCfg,
+}
+
+/// seccomp：Worker 用不到、又常被拿來攻擊核心的系統呼叫一律回 EPERM，其他照常（黑名單）。
+/// 建立新的 namespace 另由 bwrap 的 --disable-userns 擋（clone3 的參數 seccomp 看不到）。
+/// io_uring 也擋：libuv 用不了就改用一般的檔案 I/O
+#[cfg(target_os = "linux")]
+fn seccomp_program() -> Vec<u8> {
+    use libc::*;
+    #[allow(unused_mut)]
+    let mut deny: Vec<c_long> = vec![
+        SYS_ptrace, SYS_process_vm_readv, SYS_process_vm_writev, SYS_mount, SYS_umount2, SYS_pivot_root, SYS_setns,
+        SYS_keyctl, SYS_add_key, SYS_request_key, SYS_bpf, SYS_userfaultfd, SYS_perf_event_open, SYS_kexec_load,
+        SYS_kexec_file_load, SYS_init_module, SYS_finit_module, SYS_delete_module, SYS_swapon, SYS_swapoff, SYS_reboot,
+        SYS_acct, SYS_quotactl, SYS_open_by_handle_at, SYS_name_to_handle_at, SYS_syslog, SYS_io_uring_setup,
+        SYS_io_uring_enter, SYS_io_uring_register, SYS_fanotify_init, SYS_move_mount, SYS_open_tree, SYS_fsopen,
+        SYS_fsconfig, SYS_fsmount, SYS_fspick,
+    ];
+    #[cfg(target_arch = "x86_64")]
+    deny.extend([SYS_iopl, SYS_ioperm, SYS_modify_ldt, SYS_uselib]);
+    #[cfg(target_arch = "x86_64")]
+    const ARCH: u32 = 0xC000_003E; // AUDIT_ARCH_X86_64
+    #[cfg(target_arch = "aarch64")]
+    const ARCH: u32 = 0xC000_00B7; // AUDIT_ARCH_AARCH64
+    const LD_W_ABS: u16 = 0x20;
+    const JEQ_K: u16 = 0x15;
+    const JGE_K: u16 = 0x35;
+    const RET_K: u16 = 0x06;
+    const ALLOW: u32 = 0x7fff_0000;
+    const KILL: u32 = 0x8000_0000;
+    const EPERM_: u32 = 0x0005_0000 | libc::EPERM as u32;
+    let mut p: Vec<(u16, u8, u8, u32)> = vec![
+        (LD_W_ABS, 0, 0, 4), // seccomp_data.arch
+        (JEQ_K, 1, 0, ARCH),
+        (RET_K, 0, 0, KILL),
+        (LD_W_ABS, 0, 0, 0), // seccomp_data.nr
+    ];
+    let n = deny.len();
+    // x86_64 的 x32 系統呼叫（nr 有 0x40000000）也拒絕
+    if cfg!(target_arch = "x86_64") {
+        p.push((JGE_K, (n + 1) as u8, 0, 0x4000_0000));
+    }
+    for (i, nr) in deny.iter().enumerate() {
+        p.push((JEQ_K, (n - i) as u8, 0, *nr as u32));
+    }
+    p.push((RET_K, 0, 0, ALLOW));
+    p.push((RET_K, 0, 0, EPERM_));
+    p.iter().flat_map(|(code, jt, jf, k)| [&code.to_le_bytes()[..], &[*jt, *jf], &k.to_le_bytes()].concat()).collect()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn seccomp_program() -> Vec<u8> {
+    Vec::new()
 }
 
 /// 一個應用的籠子
@@ -124,7 +178,7 @@ fn setup_cgroups() -> Option<PathBuf> {
 
 impl Sandbox {
     /// 依設定決定要不要隔離；用不了時 auto 回 None（並說明），on 回錯誤
-    pub fn detect(cfg: Option<&crate::sandbox::IsolationCfg>, dev: bool) -> Result<Option<Arc<Sandbox>>> {
+    pub fn detect(cfg: Option<&crate::sandbox::IsolationCfg>, dev: bool, sock_dir: &Path) -> Result<Option<Arc<Sandbox>>> {
         let cfg = cfg.cloned().unwrap_or_default();
         match cfg.mode.as_str() {
             "off" => return Ok(None),
@@ -162,10 +216,24 @@ impl Sandbox {
         } else {
             None
         };
-        let sb = Sandbox { bwrap, user, cgroups: if root || Path::new("/sys/fs/cgroup/cgroup.controllers").exists() { setup_cgroups() } else { None }, cfg };
+        let bpf = seccomp_program();
+        let seccomp = if bpf.is_empty() {
+            None
+        } else {
+            let path = sock_dir.join("seccomp.bpf");
+            std::fs::write(&path, &bpf)?;
+            Some(CString::new(path.as_os_str().as_bytes())?)
+        };
+        let sb = Sandbox {
+            bwrap,
+            user,
+            cgroups: if root || Path::new("/sys/fs/cgroup/cgroup.controllers").exists() { setup_cgroups() } else { None },
+            seccomp,
+            cfg,
+        };
         // 真的開一個籠子試試（user namespace 可能被核心或 AppArmor 擋掉）
         let mut probe = std::process::Command::new(&sb.bwrap);
-        probe.args(["--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "true"]);
+        probe.args(["--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--ro-bind", "/", "/", "true"]);
         if let Some((uid, gid)) = sb.user {
             use std::os::unix::process::CommandExt;
             probe.uid(uid).gid(gid);
@@ -230,6 +298,9 @@ impl Sandbox {
             "--die-with-parent".into(),
             "--new-session".into(),
             "--unshare-all".into(),
+            // 籠子裡不能再建 user namespace（也就建不了其他 namespace）
+            "--unshare-user".into(),
+            "--disable-userns".into(),
             "--cap-drop".into(),
             "ALL".into(),
             "--hostname".into(),
@@ -263,6 +334,9 @@ impl Sandbox {
             a.extend(["--bind".into(), s(p), s(p)]);
         }
         a.extend(["--bind".into(), s(sock_dir), s(sock_dir), "--bind".into(), s(bindings), s(bindings)]);
+        if self.seccomp.is_some() {
+            a.extend(["--seccomp".into(), SECCOMP_FD.to_string()]);
+        }
         a.extend(["--chdir".into(), s(cwd), "--".into(), s(&node_path)]);
         let mut cmd = tokio::process::Command::new(&self.bwrap);
         cmd.args(a);
@@ -272,9 +346,23 @@ impl Sandbox {
     /// 在 exec bwrap 之前（子程序裡）：進應用的 cgroup，再換成沒有權限的使用者
     pub fn pre_exec(&self, cmd: &mut tokio::process::Command, cgroup_procs: Option<CString>) {
         let user = self.user;
-        // SAFETY：只呼叫 async-signal-safe 的 open、write、close、setgroups、setgid、setuid
+        let seccomp = self.seccomp.clone();
+        // SAFETY：只呼叫 async-signal-safe 的 open、write、close、dup2、setgroups、setgid、setuid
         unsafe {
             cmd.pre_exec(move || {
+                // seccomp 的程式檔在固定的 fd 上交給 bwrap（--seccomp）
+                if let Some(p) = &seccomp {
+                    let fd = libc::open(p.as_ptr(), libc::O_RDONLY);
+                    if fd < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    if fd != SECCOMP_FD {
+                        if libc::dup2(fd, SECCOMP_FD) < 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        libc::close(fd);
+                    }
+                }
                 if let Some(p) = &cgroup_procs {
                     let fd = libc::open(p.as_ptr(), libc::O_WRONLY);
                     if fd >= 0 {
@@ -292,6 +380,9 @@ impl Sandbox {
         }
     }
 }
+
+/// bwrap 從這個 fd 讀 seccomp 的程式
+const SECCOMP_FD: i32 = 10;
 
 fn chown_tree(p: &Path, uid: u32, gid: u32) -> Result<()> {
     std::os::unix::fs::chown(p, Some(uid), Some(gid))?;

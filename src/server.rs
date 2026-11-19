@@ -68,7 +68,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     #[cfg(unix)]
     std::fs::set_permissions(&sock_dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     let bind_listener = tokio::net::UnixListener::bind(sock_dir.join("bindings.sock"))?;
-    let sandbox = crate::sandbox::Sandbox::detect(cfg.isolation.as_ref(), dev)?;
+    let sandbox = crate::sandbox::Sandbox::detect(cfg.isolation.as_ref(), dev, &sock_dir)?;
     if let Some(sb) = &sandbox {
         sb.check_reachable(&state_root);
     }

@@ -45,6 +45,7 @@ export default {
       })));
       case '/fetch': return Response.json(await result(async () => { const r = await fetch(q('url')); return [r.status, (await r.text()).slice(0, 200)]; }));
       case '/kv': await env.KV.put('k', 'v'); return Response.json({ kv: await env.KV.get('k') });
+      case '/status': return Response.json(Object.fromEntries(readFileSync('/proc/self/status', 'utf8').split('\\n').map((l) => l.split(':\\t')).filter((p) => p.length === 2)));
       case '/who': return Response.json({ uid: process.getuid(), host: hostname(), pid: process.pid });
     }
     return new Response('?', { status: 404 });
@@ -92,6 +93,10 @@ port = ${otherPort}
     assert.equal(who.host, 'worker', '自己的 uts namespace');
     assert.ok(who.pid < 10, `自己的 pid namespace（pid ${who.pid}）`);
     if (process.getuid() === 0) assert.notEqual(who.uid, 0, '換成沒有權限的使用者');
+    const st = await S('/status');
+    assert.equal(st.Seccomp, '2', 'seccomp 過濾');
+    assert.equal(st.NoNewPrivs, '1', 'no_new_privs');
+    assert.equal(st.CapEff, '0000000000000000', '沒有任何 capability');
 
     // 檔案：別的應用的資料、rucloud 的設定、系統的帳號資料都不存在
     assert.ok(existsSync(join(state, 'other', 'kv.sqlite')), '（other 的資料在籠子外面確實存在）');
