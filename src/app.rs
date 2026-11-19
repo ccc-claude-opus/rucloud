@@ -312,6 +312,20 @@ impl App {
                     ro: [runtime_dir, dir.clone()].into_iter().chain(entry.allow_read.iter().cloned()).collect(),
                     rw: std::iter::once(state.join("do-sqlite")).chain(entry.allow_write.iter().cloned()).collect(),
                     egress,
+                    allow_connect: {
+                        // 設定的，加上 rucloud 給它的管理 API（[dynamic]、[install] 的 grant）
+                        let admin = ctx.granted.get(&name).and_then(|g| g.get("RUCLOUD_ADMIN_URL")).cloned();
+                        entry
+                            .allow_connect
+                            .iter()
+                            .cloned()
+                            .chain(admin.map(|u| u.trim_start_matches("http://").to_string()))
+                            .filter_map(|hp| {
+                                let (h, p) = hp.rsplit_once(':')?;
+                                Some((h.trim_matches(['[', ']']).to_string(), p.parse().ok()?))
+                            })
+                            .collect()
+                    },
                     memory_mb: entry.memory_mb,
                 },
             )

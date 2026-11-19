@@ -30,7 +30,7 @@ const skip = (() => {
 const SPY = `import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import net from 'node:net';
 import { hostname } from 'node:os';
-const result = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: e.code || e.message }; } };
+const result = async (fn) => { try { return { ok: await fn() }; } catch (e) { return { error: e.code || e.message, cause: String(e.cause?.code || e.cause?.message || '') }; } };
 export default {
   async fetch(request, env) {
     const u = new URL(request.url);
@@ -81,6 +81,7 @@ port = ${spyPort}
 isolate = true
 sandbox = false
 memory_mb = 128
+allow_connect = ["127.0.0.1:${adminPort}"]
 [[app]]
 path = "${other}"
 port = ${otherPort}
@@ -105,11 +106,13 @@ port = ${otherPort}
     assert.deepEqual(await S('/exists?path=/etc/passwd'), { exists: false });
     assert.deepEqual(await S(`/exists?path=${encodeURIComponent(join(state, 'spy', 'do-sqlite'))}`), { exists: true }, '自己的 Durable Object 資料夾');
 
-    // 本機網路：rucloud 的管理埠、別的應用都連不到（籠子裡只有自己的 lo）
+    // 本機網路：直接連，rucloud 的管理埠、別的應用都連不到（籠子裡只有自己的 lo）
     assert.ok((await S(`/tcp?port=${adminPort}`)).error, '管理埠');
     assert.ok((await S(`/tcp?port=${otherPort}`)).error, '別的應用');
-    // 連外經過出口代理：本機與區網拒絕
-    const local = await S(`/fetch?url=${encodeURIComponent(`http://127.0.0.1:${adminPort}/apps`)}`);
+    // 連外經過出口代理：allow_connect 列的本機服務可以，其他本機與區網拒絕
+    const allowed = await S(`/fetch?url=${encodeURIComponent(`http://127.0.0.1:${adminPort}/health`)}`);
+    assert.equal(allowed.ok?.[0], 200, JSON.stringify(allowed));
+    const local = await S(`/fetch?url=${encodeURIComponent(`http://127.0.0.1:${otherPort}/`)}`);
     assert.ok(local.error || (local.ok[0] === 403 && /網際網路/.test(local.ok[1])), JSON.stringify(local));
     const lan = await S(`/fetch?url=${encodeURIComponent('http://192.168.1.1/')}`);
     assert.ok(lan.error || lan.ok[0] === 403, JSON.stringify(lan));

@@ -35,9 +35,12 @@ pub fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-/// 查 DNS，所有位址都要是網際網路上的（有一個不是就拒絕）；回傳要連的位址
-async fn resolve_public(host: &str, port: u16) -> Result<SocketAddr> {
+/// 查 DNS，所有位址都要是網際網路上的（有一個不是就拒絕），或是 allow 列的服務；回傳要連的位址
+async fn resolve_public(host: &str, port: u16, allow: &[(String, u16)]) -> Result<SocketAddr> {
     let host = host.trim_start_matches('[').trim_end_matches(']');
+    if allow.iter().any(|(h, p)| *p == port && h.eq_ignore_ascii_case(host)) {
+        return tokio::net::lookup_host((host, port)).await?.next().with_context(|| format!("查不到 {host}"));
+    }
     if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
         bail!("{host}：只能連到網際網路上的位址");
     }
@@ -60,7 +63,7 @@ async fn refuse(c: &mut UnixStream, status: &str, msg: &str) {
 }
 
 /// `CONNECT host:port`（HTTPS、WebSocket over TLS），或 `GET http://host/path`（HTTP）
-async fn handle(mut c: UnixStream) -> Result<()> {
+async fn handle(mut c: UnixStream, allow: &[(String, u16)]) -> Result<()> {
     let mut buf = Vec::with_capacity(2048);
     let end = loop {
         if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
@@ -87,7 +90,7 @@ async fn handle(mut c: UnixStream) -> Result<()> {
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = target.rsplit_once(':').context("CONNECT 的目標要是 host:port")?;
         let port: u16 = port.parse().context("埠號不對")?;
-        let addr = match resolve_public(host, port).await {
+        let addr = match resolve_public(host, port, allow).await {
             Ok(a) => a,
             Err(e) => return Ok(refuse(&mut c, "403 Forbidden", &format!("{e:#}")).await),
         };
@@ -118,7 +121,7 @@ async fn handle(mut c: UnixStream) -> Result<()> {
         },
         _ => (authority, 80),
     };
-    let addr = match resolve_public(host, port).await {
+    let addr = match resolve_public(host, port, allow).await {
         Ok(a) => a,
         Err(e) => return Ok(refuse(&mut c, "403 Forbidden", &format!("{e:#}")).await),
     };
@@ -145,7 +148,8 @@ async fn handle(mut c: UnixStream) -> Result<()> {
 }
 
 /// 在 path 聽出口代理，直到 stop
-pub fn serve(path: &Path, stop: CancellationToken, app: String) -> Result<()> {
+pub fn serve(path: &Path, stop: CancellationToken, app: String, allow: Vec<(String, u16)>) -> Result<()> {
+    let allow = std::sync::Arc::new(allow);
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path).with_context(|| format!("出口代理 {}", path.display()))?;
     tokio::spawn(async move {
@@ -154,9 +158,9 @@ pub fn serve(path: &Path, stop: CancellationToken, app: String) -> Result<()> {
                 _ = stop.cancelled() => return,
                 r = listener.accept() => match r {
                     Ok((c, _)) => {
-                        let app = app.clone();
+                        let (app, allow) = (app.clone(), allow.clone());
                         tokio::spawn(async move {
-                            if let Err(e) = handle(c).await {
+                            if let Err(e) = handle(c, &allow).await {
                                 tracing::debug!("[{app}] 出口代理：{e:#}");
                             }
                         });

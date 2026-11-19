@@ -34,7 +34,8 @@ const bindingsForwarder = net.createServer((c) => {
   up.on('error', () => c.destroy());
   c.pipe(up).pipe(c);
 });
-await new Promise((resolve) => bindingsForwarder.listen(0, '127.0.0.1', resolve));
+// 籠子裡用固定的 3129（NO_PROXY 只放這個埠，其他本機位址都經過出口代理）
+await new Promise((resolve) => bindingsForwarder.listen(spec.caged ? 3129 : 0, '127.0.0.1', resolve));
 const B = `http://127.0.0.1:${bindingsForwarder.address().port}${spec.bindingsPath}`;
 // 作業系統層級的籠子（[isolation]）裡沒有網路，只有這個程序池的資料夾：連外的 fetch 經過
 // HTTP(S)_PROXY=http://127.0.0.1:3128（rucloud 設好的）接到 rucloud 的出口代理（egress.sock）

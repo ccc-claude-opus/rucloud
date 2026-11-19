@@ -428,6 +428,7 @@ async fn main() -> Result<()> {
                     installed: false,
                     untrusted: false,
                     isolate: false,
+                    allow_connect: Vec::new(),
                     cache_mb,
                 }],
             };

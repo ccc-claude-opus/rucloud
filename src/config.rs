@@ -496,6 +496,9 @@ pub struct AppEntry {
     /// 這個應用也放進籠子（[isolation]；不可信的應用一律放）。籠子裡只能連網際網路，連不到本機與區網
     #[serde(default)]
     pub isolate: bool,
+    /// 籠子裡的應用還可以連的本機服務（"host:port"，例如 "127.0.0.1:8799"）；其他本機與區網的位址都連不到
+    #[serde(default)]
+    pub allow_connect: Vec<String>,
 }
 
 fn default_state() -> PathBuf {

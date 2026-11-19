@@ -117,11 +117,19 @@ impl Pool {
             restarts: std::sync::atomic::AtomicU64::new(0),
         });
         // 籠子裡的 Worker 連到外面的唯一通道
-        if let Some((_, cage)) = &spec.cage
+        if let Some((sb, cage)) = &spec.cage
             && cage.egress
-            && let Err(e) = crate::egress::serve(&dir.join("egress.sock"), pool.stop.clone(), spec.app.clone())
         {
-            tracing::error!("[{}] {e:#}", spec.app);
+            let sock = dir.join("egress.sock");
+            let served = crate::egress::serve(&sock, pool.stop.clone(), spec.app.clone(), cage.allow_connect.clone());
+            // 換了使用者的 Worker 要連得到它
+            let owned = served.and_then(|()| match sb.user {
+                Some((uid, gid)) => std::os::unix::fs::chown(&sock, Some(uid), Some(gid)).map_err(Into::into),
+                None => Ok(()),
+            });
+            if let Err(e) = owned {
+                tracing::error!("[{}] 出口代理：{e:#}", spec.app);
+            }
         }
         let spec = Arc::new(spec);
         for i in 0..n {
@@ -228,7 +236,8 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
                 cmd.env("NODE_USE_ENV_PROXY", "1")
                     .env("HTTP_PROXY", "http://127.0.0.1:3128")
                     .env("HTTPS_PROXY", "http://127.0.0.1:3128")
-                    .env("NO_PROXY", "127.0.0.1,localhost");
+                    // 只有綁定 API 的轉送（固定的 3129）不走代理；本機的其他服務也要經過代理（allow_connect）
+                    .env("NO_PROXY", "127.0.0.1:3129");
             }
             sb.pre_exec(&mut cmd, pool.cgroup.clone());
         }

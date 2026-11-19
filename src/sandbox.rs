@@ -124,6 +124,8 @@ pub struct Cage {
     pub rw: Vec<PathBuf>,
     /// 可以經過出口代理連到網際網路
     pub egress: bool,
+    /// 出口代理另外放行的本機服務（host, port）
+    pub allow_connect: Vec<(String, u16)>,
     pub memory_mb: Option<u32>,
 }
 

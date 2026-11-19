@@ -239,7 +239,7 @@ pids = 64            # 每個 Worker 程序最多幾個程序／執行緒
 tmp_mb = 64          # 籠子裡的 /tmp
 ```
 
-`rucloud.toml` 裡的應用也可以加 `isolate = true` 放進籠子（籠子裡連不到本機的其他服務，需要的應用不要開）。這一層是 Linux 的 namespace，共用同一個核心，擋不住核心本身的漏洞。
+`rucloud.toml` 裡的應用也可以加 `isolate = true` 放進籠子。籠子裡連不到本機與區網；需要的本機服務用 `allow_connect = ["127.0.0.1:8799"]` 列出（出口代理只放行這些 `host:port`），有 `[dynamic]`、`[install]` 的 grant 的應用自動可以連管理 API。這一層是 Linux 的 namespace，共用同一個核心，擋不住核心本身的漏洞。
 
 ### 持續複寫（建議正式環境開啟）
 
