@@ -217,6 +217,29 @@ curl -X DELETE -H "Authorization: Bearer $RUCLOUD_INSTALL_TOKEN" "$RUCLOUD_ADMIN
 
 `[install]` 的 token 只能做這些事（加上 `GET /apps` 列出應用、看安裝的應用的 versions 與 logs）；重新安裝已移除（保留資料）的應用時，舊的權限不沿用。
 
+### 作業系統層級的隔離（`[isolation]`）
+
+`[install]`、`[dynamic]` 的應用是不可信的程式碼。Node 的權限模型（`sandbox`）擋得住一般的程式，但 Node 官方說明它不是擋惡意程式碼的安全邊界。在 Linux 上，rucloud 會把這些應用的 Worker 程序再放進 [bubblewrap](https://github.com/containers/bubblewrap)（`bwrap`）的籠子：
+
+| 限制 | 做法 |
+|---|---|
+| 檔案 | 自己的 mount namespace：只看得到系統的 `/usr`、`/lib`、rucloud 的執行環境、應用自己的程式碼（唯讀）與 Durable Object 資料夾（可寫），`/tmp` 是有大小上限的 tmpfs。別的應用的資料、`rucloud.toml`、`/etc/passwd` 都不存在 |
+| 網路 | 自己的 network namespace：只有自己的 `lo`。和 rucloud 之間只靠 Unix socket（綁定 API、這個程序池的資料夾）；連外經過 rucloud 的**出口代理**（`HTTP(S)_PROXY`），在籠子外面查 DNS，本機、私有網路、CGNAT、連結本地位址一律拒絕。沒有 `network` 權限的安裝應用沒有出口代理 |
+| 程序 | 自己的 pid、ipc、uts namespace；`--cap-drop ALL`、`--die-with-parent`、`--new-session` |
+| 使用者 | rucloud 是 root 時，Worker 先換成 `user`（預設 `rucloud-worker`，要先 `useradd -r rucloud-worker`） |
+| 資源 | 有 cgroup v2 時每個應用一個 cgroup（rucloud 自己的 cgroup 底下的 `workers/<應用>`）：記憶體（`memory_mb`）、CPU、程序數上限。systemd 的服務要加 `Delegate=yes` |
+
+```toml
+[isolation]
+mode = "auto"        # auto（預設：有 bwrap 就用，用不了只發警告；rucloud dev 不用）、on（用不了就不啟動）、off
+user = "rucloud-worker"
+cpu = 0.5            # 每個應用最多幾顆 CPU
+pids = 64            # 每個 Worker 程序最多幾個程序／執行緒
+tmp_mb = 64          # 籠子裡的 /tmp
+```
+
+`rucloud.toml` 裡的應用也可以加 `isolate = true` 放進籠子（籠子裡連不到本機的其他服務，需要的應用不要開）。這一層是 Linux 的 namespace，共用同一個核心，擋不住核心本身的漏洞。
+
 ### 持續複寫（建議正式環境開啟）
 
 ```toml

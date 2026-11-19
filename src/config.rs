@@ -397,6 +397,8 @@ pub struct ServeConfig {
     pub email: Option<crate::email::EmailCfg>,
     /// Workers AI 的後端（OpenAI 相容）與每個應用每天的上限；管理 API 的 /ai 改過後以 <state_dir>/ai.json 為準
     pub ai: Option<crate::ai::AiBackend>,
+    /// 作業系統層級的隔離（Linux 的 bubblewrap）：不可信的應用的 Worker 放進籠子
+    pub isolation: Option<crate::sandbox::IsolationCfg>,
     /// 自己的網域：每個應用自動有 <名稱>.<base>
     pub domain: Option<DomainCfg>,
     /// 信任的反向代理（IP、CIDR，或 "cloudflare"）：只有從這些位址來的請求才採用
@@ -488,6 +490,12 @@ pub struct AppEntry {
     /// 安裝的應用（[install]）：權限讀自 <state>/<應用>/grants.json
     #[serde(skip)]
     pub installed: bool,
+    /// 不可信的程式碼（[install]、[dynamic]）：有 [isolation] 時放進作業系統層級的籠子
+    #[serde(skip)]
+    pub untrusted: bool,
+    /// 這個應用也放進籠子（[isolation]；不可信的應用一律放）。籠子裡只能連網際網路，連不到本機與區網
+    #[serde(default)]
+    pub isolate: bool,
 }
 
 fn default_state() -> PathBuf {

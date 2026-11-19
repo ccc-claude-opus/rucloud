@@ -64,6 +64,8 @@ const notesApp = (version) => ({
           try { readFileSync(${JSON.stringify(join(ROOT, 'Cargo.toml'))}); readOutside = true; } catch { readOutside = false; }
           return Response.json({
             pid: process.pid,
+            // 籠子（[isolation]）裡每個程序都有自己的 pid namespace，pid 可能一樣：另外用一個程序自己的亂數
+            proc: globalThis.__procId ??= crypto.randomUUID(),
             envKeys: Object.keys(globalThis.__rucloud?.env || {}),
             readOutside,
           });
@@ -121,7 +123,7 @@ port = ${helloPort}
     assert.equal((await admin(adminPort, '/apps/gen-b', { method: 'PUT', body: pack(notesApp('b')), token: DYN_TOKEN })).status, 201);
     assert.deepEqual((await edge(edgePort, 'gen-b.localhost', '/api/notes')).body, { version: 'b', notes: [] });
     const [pa, pb] = [(await edge(edgePort, 'gen-a.localhost', '/api/probe')).body, (await edge(edgePort, 'gen-b.localhost', '/api/probe')).body];
-    assert.notEqual(pa.pid, pb.pid, '不同的 Worker 程序');
+    assert.notEqual(pa.proc, pb.proc, '不同的 Worker 程序');
     assert.deepEqual(pa.envKeys.sort(), ['DB', 'VERSION']);
     assert.equal(pa.readOutside, false, '沙箱：讀不到應用資料夾外的檔案');
 

@@ -1915,6 +1915,7 @@ dependencies = [
  "instant-acme",
  "json5",
  "lettre",
+ "libc",
  "md-5",
  "mime_guess",
  "rand 0.9.5",

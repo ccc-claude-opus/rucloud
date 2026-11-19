@@ -35,6 +35,8 @@ mod types;
 mod vectorize;
 mod images;
 mod email;
+mod egress;
+mod sandbox;
 mod workflows;
 mod ws;
 
@@ -391,6 +393,7 @@ async fn main() -> Result<()> {
                 install: None,
                 email: None,
                 ai: None,
+                isolation: None,
                 trusted_proxies: crate::proxy::default_list(),
                 domain: None,
                 tls: match (tls_cert, tls_key) {
@@ -423,6 +426,8 @@ async fn main() -> Result<()> {
                     log_files: true,
                     do_idle_ms: None,
                     installed: false,
+                    untrusted: false,
+                    isolate: false,
                     cache_mb,
                 }],
             };

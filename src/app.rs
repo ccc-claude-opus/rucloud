@@ -51,6 +51,8 @@ pub struct Ctx {
     pub host_js: PathBuf,
     /// Unix socket 的資料夾：綁定 API（bindings.sock）與每個 Worker 程序的 socket
     pub sock_dir: PathBuf,
+    /// 作業系統層級的隔離（[isolation]，Linux 上有 bubblewrap 時）
+    pub sandbox: Option<Arc<crate::sandbox::Sandbox>>,
     pub http: reqwest::Client,
     pub dev: bool,
     /// [dynamic] 的 grant：應用名稱 → 額外放進 env 的變數（RUCLOUD_ADMIN_URL、RUCLOUD_DYNAMIC_TOKEN）
@@ -231,6 +233,9 @@ impl App {
         }
 
         let assets = cfg.assets.as_ref().map(|a| Assets::new(&dir, a));
+        // 作業系統層級的籠子：不可信的應用，或設定了 isolate 的應用；籠子裡只能經出口代理連網際網路
+        let caged = ctx.sandbox.is_some() && (entry.untrusted || entry.isolate);
+        let egress = grants.as_ref().is_none_or(|g| g.network);
         let spec = json!({
             "app": name,
             "main": cfg.main.as_ref().map(|m| dir.join(m)),
@@ -266,6 +271,8 @@ impl App {
             "doSqliteDir": state.join("do-sqlite"),
             "rules": cfg.rules,
             "doIdleMs": entry.do_idle_ms.unwrap_or(60_000),
+            "caged": caged,
+            "egress": caged && egress,
         });
         let logs = shared.logs.clone();
         // npm 套件的 exports 條件和 wrangler 打包時一樣：workerd、worker、browser（Node 自己的 node、import 也在）
@@ -296,6 +303,19 @@ impl App {
             0 => None,
             ms => Some(std::time::Duration::from_millis(ms)),
         };
+        let cage = (caged && cfg.main.is_some()).then(|| {
+            let runtime_dir = ctx.host_js.parent().unwrap_or(&ctx.host_js).to_path_buf();
+            (
+                ctx.sandbox.clone().unwrap(),
+                crate::sandbox::Cage {
+                    app: name.clone(),
+                    ro: [runtime_dir, dir.clone()].into_iter().chain(entry.allow_read.iter().cloned()).collect(),
+                    rw: std::iter::once(state.join("do-sqlite")).chain(entry.allow_write.iter().cloned()).collect(),
+                    egress,
+                    memory_mb: entry.memory_mb,
+                },
+            )
+        });
         let pool = cfg.main.as_ref().map(|_| {
             Pool::start(
                 WorkerSpec {
@@ -307,6 +327,7 @@ impl App {
                     node_args,
                     max_block,
                     sock_dir: ctx.sock_dir.clone(),
+                    cage,
                     token: token.clone(),
                     logs: logs.clone(),
                 },

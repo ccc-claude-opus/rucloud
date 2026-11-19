@@ -36,6 +36,17 @@ const bindingsForwarder = net.createServer((c) => {
 });
 await new Promise((resolve) => bindingsForwarder.listen(0, '127.0.0.1', resolve));
 const B = `http://127.0.0.1:${bindingsForwarder.address().port}${spec.bindingsPath}`;
+// 作業系統層級的籠子（[isolation]）裡沒有網路，只有這個程序池的資料夾：連外的 fetch 經過
+// HTTP(S)_PROXY=http://127.0.0.1:3128（rucloud 設好的）接到 rucloud 的出口代理（egress.sock）
+if (spec.egress) {
+  const egress = net.createServer((c) => {
+    const up = net.connect(`${dirname(SOCKET)}/egress.sock`);
+    c.on('error', () => up.destroy());
+    up.on('error', () => c.destroy());
+    c.pipe(up).pipe(c);
+  });
+  await new Promise((resolve) => egress.listen(3128, '127.0.0.1', resolve));
+}
 const AUTH = { 'x-rucloud-token': spec.token };
 const nativeFetch = globalThis.fetch;
 const enc = encodeURIComponent;
@@ -65,6 +76,8 @@ function isPublicAddress(addr) {
 async function checkPublic(url) {
   const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
   if (host === 'localhost' || host.endsWith('.localhost')) throw new TypeError(`${host}：安裝的應用只能連到網際網路上的位址`);
+  // 籠子裡查不到 DNS：網域名稱交給出口代理在籠子外面查、檢查
+  if (spec.caged && !isIP(host)) return;
   const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true });
   for (const { address } of addrs) {
     if (!isPublicAddress(address)) throw new TypeError(`${host}（${address}）：安裝的應用只能連到網際網路上的位址`);

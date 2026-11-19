@@ -68,6 +68,18 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     #[cfg(unix)]
     std::fs::set_permissions(&sock_dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     let bind_listener = tokio::net::UnixListener::bind(sock_dir.join("bindings.sock"))?;
+    let sandbox = crate::sandbox::Sandbox::detect(cfg.isolation.as_ref(), dev)?;
+    if let Some(sb) = &sandbox {
+        sb.check_reachable(&state_root);
+    }
+    #[cfg(unix)]
+    if let Some((_, gid)) = sandbox.as_ref().and_then(|s| s.user) {
+        // 換了使用者的 Worker 也要進得了 socket 資料夾、連得到綁定 API（不能列出資料夾的內容）
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&sock_dir, std::fs::Permissions::from_mode(0o711))?;
+        std::os::unix::fs::chown(sock_dir.join("bindings.sock"), None, Some(gid))?;
+        std::fs::set_permissions(sock_dir.join("bindings.sock"), std::fs::Permissions::from_mode(0o660))?;
+    }
     let http = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -128,6 +140,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         node: cfg.node.clone(),
         host_js: host_js.clone(),
         sock_dir: sock_dir.clone(),
+        sandbox,
         http,
         dev,
         granted: Arc::new(granted),

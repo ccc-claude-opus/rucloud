@@ -377,6 +377,7 @@ fn dynamic_limits(d: &crate::config::DynamicCfg) -> Limits {
 fn install_entry(i: &crate::config::InstallCfg, ctx: &Ctx, name: &str) -> Result<crate::config::AppEntry> {
     let mut e = runtime_entry(Some((i.instances, i.memory_mb, i.max_block_ms)), ctx, name)?;
     e.installed = true;
+    e.untrusted = true;
     Ok(e)
 }
 
@@ -407,7 +408,8 @@ impl Deployer {
         if self.registry.dynamic_count() >= d.max_apps {
             bail!("執行中新增的應用已經有 {} 個（max_apps）", d.max_apps);
         }
-        let entry = runtime_entry(Some(dynamic_limits(&d)), &self.ctx, name)?;
+        let mut entry = runtime_entry(Some(dynamic_limits(&d)), &self.ctx, name)?;
+        entry.untrusted = true;
         Ok((self.create(name, entry, Kind::Dynamic, tar_gz, message).await?, true))
     }
 
@@ -597,7 +599,10 @@ impl Deployer {
                         tracing::warn!("[{name}] rucloud.toml 沒有 [install]，略過");
                         continue;
                     }
-                    (Kind::Dynamic, Some(d), _) => runtime_entry(Some(dynamic_limits(d)), &self.ctx, &name),
+                    (Kind::Dynamic, Some(d), _) => runtime_entry(Some(dynamic_limits(d)), &self.ctx, &name).map(|mut e| {
+                        e.untrusted = true;
+                        e
+                    }),
                     (Kind::Installed, _, Some(i)) => install_entry(i, &self.ctx, &name),
                     _ => runtime_entry(None, &self.ctx, &name),
                 };

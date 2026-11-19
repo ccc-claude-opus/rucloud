@@ -14,6 +14,8 @@ pub struct WorkerSpec {
     pub app: String,
     /// rucloud 與 Worker 之間的 Unix socket 放在這裡（每個程序一個 w<編號>-<i>.sock）
     pub sock_dir: PathBuf,
+    /// 作業系統層級的籠子（[isolation]）
+    pub cage: Option<(Arc<crate::sandbox::Sandbox>, crate::sandbox::Cage)>,
     pub node: String,
     pub host_js: PathBuf,
     pub cwd: PathBuf,
@@ -61,6 +63,10 @@ pub struct Pool {
     /// 1：程序已經在聽它的 socket
     slots: Vec<AtomicU16>,
     endpoints: Vec<Endpoint>,
+    /// 這個程序池的 socket 資料夾（籠子裡只看得到這個資料夾與綁定 API 的 socket）
+    dir: PathBuf,
+    /// 籠子的 cgroup（cgroup.procs 的路徑）
+    cgroup: Option<std::ffi::CString>,
     rr: AtomicUsize,
     ready: Notify,
     restart: watch::Sender<u64>,
@@ -87,9 +93,22 @@ impl Pool {
         let n = n.max(1);
         let (restart, _) = watch::channel(0);
         let id = NEXT_POOL.fetch_add(1, Ordering::Relaxed);
-        let endpoints = (0..n).map(|i| Endpoint::new(spec.sock_dir.join(format!("w{id}-{i}.sock")))).collect();
+        let dir = spec.sock_dir.join(format!("w{id}"));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::error!("[{}] 建不了 socket 資料夾 {}：{e}", spec.app, dir.display());
+        }
+        let endpoints = (0..n).map(|i| Endpoint::new(dir.join(format!("{i}.sock")))).collect();
+        let mut cgroup = None;
+        if let Some((sb, cage)) = &spec.cage {
+            match sb.prepare(cage, &dir, n) {
+                Ok(c) => cgroup = c,
+                Err(e) => tracing::error!("[{}] 準備籠子失敗：{e:#}", spec.app),
+            }
+        }
         let pool = Arc::new(Pool {
             endpoints,
+            dir: dir.clone(),
+            cgroup,
             slots: (0..n).map(|_| AtomicU16::new(0)).collect(),
             rr: AtomicUsize::new(0),
             ready: Notify::new(),
@@ -97,6 +116,13 @@ impl Pool {
             stop: tokio_util::sync::CancellationToken::new(),
             restarts: std::sync::atomic::AtomicU64::new(0),
         });
+        // 籠子裡的 Worker 連到外面的唯一通道
+        if let Some((_, cage)) = &spec.cage
+            && cage.egress
+            && let Err(e) = crate::egress::serve(&dir.join("egress.sock"), pool.stop.clone(), spec.app.clone())
+        {
+            tracing::error!("[{}] {e:#}", spec.app);
+        }
         let spec = Arc::new(spec);
         for i in 0..n {
             tokio::spawn(supervise(pool.clone(), spec.clone(), i));
@@ -164,7 +190,17 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
         // 上一個程序留下的 socket 檔
         let sock = pool.endpoints[i].sock.clone();
         let _ = std::fs::remove_file(&*sock);
-        let mut cmd = Command::new(&spec.node);
+        let mut cmd = match &spec.cage {
+            Some((sb, cage)) => match sb.command(cage, &spec.node, &pool.dir, &spec.sock_dir.join("bindings.sock"), &spec.cwd) {
+                Ok(c) => c,
+                Err(e) => {
+                    spec.logs.push("error", &format!("開不了籠子：{e:#}"), true);
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
+            },
+            None => Command::new(&spec.node),
+        };
         // --experimental-transform-types：TypeScript 的 enum、namespace 等也能直接跑
         cmd.args([
             "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
@@ -182,10 +218,21 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
                 cmd.env(k, v);
             }
         }
-        let child = cmd
-            .env("RUCLOUD_SPEC", &spec.spec_json)
+        cmd.env("RUCLOUD_SPEC", &spec.spec_json)
             .env("RUCLOUD_INSTANCE", i.to_string())
-            .env("RUCLOUD_SOCKET", &*sock)
+            .env("RUCLOUD_SOCKET", &*sock);
+        if let Some((sb, cage)) = &spec.cage {
+            cmd.env("TMPDIR", "/tmp");
+            if cage.egress {
+                // 籠子裡的 network namespace 只有自己的 lo：fetch 經過 127.0.0.1:3128 的轉送接到出口代理
+                cmd.env("NODE_USE_ENV_PROXY", "1")
+                    .env("HTTP_PROXY", "http://127.0.0.1:3128")
+                    .env("HTTPS_PROXY", "http://127.0.0.1:3128")
+                    .env("NO_PROXY", "127.0.0.1,localhost");
+            }
+            sb.pre_exec(&mut cmd, pool.cgroup.clone());
+        }
+        let child = cmd
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
