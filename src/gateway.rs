@@ -251,7 +251,7 @@ pub async fn forward(
     external: bool,
 ) -> anyhow::Result<Response<Body>> {
     let pool = app.pool.as_ref().ok_or_else(|| anyhow::anyhow!("{} 沒有 Worker", app.name))?;
-    let port = pool.port(affinity).await?;
+    let ep = pool.endpoint(affinity).await?;
     let mut headers = HeaderMap::new();
     for (k, v) in req.headers().iter() {
         let name = k.as_str();
@@ -271,12 +271,12 @@ pub async fn forward(
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "/".into());
     if crate::ws::is_upgrade(req.headers()) {
-        return crate::ws::tunnel(req, port, &pq, &headers, external.then(|| app.metrics.clone())).await;
+        return crate::ws::tunnel(req, &ep.sock, &pq, &headers, external.then(|| app.metrics.clone())).await;
     }
     let (parts, body) = req.into_parts();
-    let resp = app
-        .http
-        .request(parts.method, format!("http://127.0.0.1:{port}{pq}"))
+    let resp = ep
+        .client
+        .request(parts.method, ep.url(&pq))
         .headers(headers)
         .body(reqwest::Body::wrap_stream(body.into_data_stream()))
         .send()
@@ -297,10 +297,10 @@ pub async fn invoke(app: &App, kind: &str, body: &Value) -> anyhow::Result<Value
 
 pub async fn invoke_on(app: &App, affinity: Option<usize>, kind: &str, body: &Value, extra: &[(&str, String)]) -> anyhow::Result<Value> {
     let pool = app.pool.as_ref().ok_or_else(|| anyhow::anyhow!("{} 沒有 Worker", app.name))?;
-    let port = pool.port(affinity).await?;
-    let mut rb = app
-        .http
-        .post(format!("http://127.0.0.1:{port}/__rucloud/{kind}"))
+    let ep = pool.endpoint(affinity).await?;
+    let mut rb = ep
+        .client
+        .post(ep.url(&format!("/__rucloud/{kind}")))
         .header("x-rucloud-kind", kind)
         .header("x-rucloud-token", &app.token)
         .json(body);

@@ -12,6 +12,8 @@ use tokio::sync::{Notify, watch};
 
 pub struct WorkerSpec {
     pub app: String,
+    /// rucloud 與 Worker 之間的 Unix socket 放在這裡（每個程序一個 w<編號>-<i>.sock）
+    pub sock_dir: PathBuf,
     pub node: String,
     pub host_js: PathBuf,
     pub cwd: PathBuf,
@@ -20,16 +22,45 @@ pub struct WorkerSpec {
     pub node_args: Vec<String>,
     /// 事件迴圈卡住超過這麼久就砍掉程序重開（無窮迴圈保護）
     pub max_block: Option<Duration>,
-    pub http: reqwest::Client,
     pub token: String,
     pub logs: Arc<crate::observe::Logs>,
 }
+
+/// 一個 Worker 程序：它的 Unix socket，和連到那個 socket 的 HTTP client
+#[derive(Clone)]
+pub struct Endpoint {
+    pub client: reqwest::Client,
+    pub sock: Arc<PathBuf>,
+}
+
+impl Endpoint {
+    fn new(sock: PathBuf) -> Self {
+        let client = reqwest::Client::builder()
+            .unix_socket(sock.clone())
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .pool_max_idle_per_host(256)
+            .build()
+            .expect("Unix socket 的 HTTP client");
+        Self { client, sock: Arc::new(sock) }
+    }
+
+    /// 請求這個程序的網址（主機名稱沒有意義，連線走 socket）
+    pub fn url(&self, path_and_query: &str) -> String {
+        format!("http://worker{path_and_query}")
+    }
+}
+
+/// 每個程序池的編號（socket 的檔名要短：macOS 的 Unix socket 路徑上限是 104 bytes）
+static NEXT_POOL: AtomicUsize = AtomicUsize::new(0);
 
 /// Worker 程序只拿到這些環境變數；rucloud 自己的環境（金鑰等）不會漏進去
 const PASS_ENV: &[&str] = &["PATH", "HOME", "LANG", "LC_ALL", "TZ", "NODE_ENV", "SYSTEMROOT", "TMPDIR"];
 
 pub struct Pool {
+    /// 1：程序已經在聽它的 socket
     slots: Vec<AtomicU16>,
+    endpoints: Vec<Endpoint>,
     rr: AtomicUsize,
     ready: Notify,
     restart: watch::Sender<u64>,
@@ -55,7 +86,10 @@ impl Pool {
     pub fn start(spec: WorkerSpec, n: usize) -> Arc<Pool> {
         let n = n.max(1);
         let (restart, _) = watch::channel(0);
+        let id = NEXT_POOL.fetch_add(1, Ordering::Relaxed);
+        let endpoints = (0..n).map(|i| Endpoint::new(spec.sock_dir.join(format!("w{id}-{i}.sock")))).collect();
         let pool = Arc::new(Pool {
+            endpoints,
             slots: (0..n).map(|_| AtomicU16::new(0)).collect(),
             rr: AtomicUsize::new(0),
             ready: Notify::new(),
@@ -87,15 +121,15 @@ impl Pool {
         self.slots.len()
     }
 
-    /// 取一個可用程序的埠號。affinity 指定時固定用那一個（Durable Objects 用）。
-    pub async fn port(&self, affinity: Option<usize>) -> Result<u16> {
+    /// 取一個可用的程序。affinity 指定時固定用那一個（Durable Objects 用）。
+    pub async fn endpoint(&self, affinity: Option<usize>) -> Result<Endpoint> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
             let notified = self.ready.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(p) = self.try_port(affinity) {
-                return Ok(p);
+            if let Some(i) = self.try_slot(affinity) {
+                return Ok(self.endpoints[i].clone());
             }
             if tokio::time::timeout_at(deadline, notified).await.is_err() {
                 bail!("Worker 程序 30 秒內沒有啟動完成");
@@ -103,15 +137,13 @@ impl Pool {
         }
     }
 
-    fn try_port(&self, affinity: Option<usize>) -> Option<u16> {
+    fn try_slot(&self, affinity: Option<usize>) -> Option<usize> {
         let n = self.slots.len();
         if let Some(i) = affinity {
-            return Some(self.slots[i % n].load(Ordering::Acquire)).filter(|p| *p != 0);
+            return Some(i % n).filter(|&i| self.slots[i].load(Ordering::Acquire) != 0);
         }
         let start = self.rr.fetch_add(1, Ordering::Relaxed);
-        (0..n)
-            .map(|k| self.slots[(start + k) % n].load(Ordering::Acquire))
-            .find(|p| *p != 0)
+        (0..n).map(|k| (start + k) % n).find(|&i| self.slots[i].load(Ordering::Acquire) != 0)
     }
 
     pub fn restart(&self) {
@@ -129,6 +161,9 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
     let mut backoff = Duration::from_millis(200);
     loop {
         let started = Instant::now();
+        // 上一個程序留下的 socket 檔
+        let sock = pool.endpoints[i].sock.clone();
+        let _ = std::fs::remove_file(&*sock);
         let mut cmd = Command::new(&spec.node);
         // --experimental-transform-types：TypeScript 的 enum、namespace 等也能直接跑
         cmd.args([
@@ -150,6 +185,7 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
         let child = cmd
             .env("RUCLOUD_SPEC", &spec.spec_json)
             .env("RUCLOUD_INSTANCE", i.to_string())
+            .env("RUCLOUD_SOCKET", &*sock)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -172,8 +208,8 @@ async fn supervise(pool: Arc<Pool>, spec: Arc<WorkerSpec>, i: usize) {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(out).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if let Some(p) = line.strip_prefix("RUCLOUD_READY ") {
-                        pool.slots[i].store(p.trim().parse().unwrap_or(0), Ordering::Release);
+                    if line.starts_with("RUCLOUD_READY") {
+                        pool.slots[i].store(1, Ordering::Release);
                         pool.ready.notify_waiters();
                     } else {
                         logs.push("console", &line, true);
@@ -232,13 +268,13 @@ async fn watchdog(pool: &Pool, spec: &WorkerSpec, i: usize) -> Duration {
     };
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let port = pool.slots[i].load(Ordering::Acquire);
-        if port == 0 {
+        if pool.slots[i].load(Ordering::Acquire) == 0 {
             continue;
         }
-        let ping = spec
-            .http
-            .get(format!("http://127.0.0.1:{port}/__rucloud/ping"))
+        let ep = &pool.endpoints[i];
+        let ping = ep
+            .client
+            .get(ep.url("/__rucloud/ping"))
             .header("x-rucloud-kind", "ping")
             .header("x-rucloud-token", &spec.token)
             .send();

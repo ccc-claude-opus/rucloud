@@ -49,7 +49,8 @@ pub struct Ctx {
     pub state_root: PathBuf,
     pub node: String,
     pub host_js: PathBuf,
-    pub bindings_url: String,
+    /// Unix socket 的資料夾：綁定 API（bindings.sock）與每個 Worker 程序的 socket
+    pub sock_dir: PathBuf,
     pub http: reqwest::Client,
     pub dev: bool,
     /// [dynamic] 的 grant：應用名稱 → 額外放進 env 的變數（RUCLOUD_ADMIN_URL、RUCLOUD_DYNAMIC_TOKEN）
@@ -233,7 +234,8 @@ impl App {
         let spec = json!({
             "app": name,
             "main": cfg.main.as_ref().map(|m| dir.join(m)),
-            "bindingsUrl": format!("{}/b/{}", ctx.bindings_url, urlencoding::encode(&name)),
+            "bindingsSocket": ctx.sock_dir.join("bindings.sock"),
+            "bindingsPath": format!("/b/{}", urlencoding::encode(&name)),
             "token": token,
             "vars": vars,
             "d1": cfg.d1_databases.iter().map(|d| &d.binding).collect::<Vec<_>>(),
@@ -304,7 +306,7 @@ impl App {
                     spec_json: spec.to_string(),
                     node_args,
                     max_block,
-                    http: ctx.http.clone(),
+                    sock_dir: ctx.sock_dir.clone(),
                     token: token.clone(),
                     logs: logs.clone(),
                 },

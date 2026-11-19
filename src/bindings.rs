@@ -701,10 +701,10 @@ async fn service_rpc(State(hub): S, Path((app, binding)): Path<(String, String)>
         .ok_or_else(|| not_found(&format!("service 綁定 {binding}")))?;
     let target = hub.app(&svc.service)?;
     let pool = target.pool.as_ref().ok_or_else(|| anyhow!("{} 沒有 Worker", target.name))?;
-    let port = pool.port(None).await?;
-    let mut rb = target
-        .http
-        .post(format!("http://127.0.0.1:{port}/__rucloud/rpc"))
+    let ep = pool.endpoint(None).await?;
+    let mut rb = ep
+        .client
+        .post(ep.url("/__rucloud/rpc"))
         .header("x-rucloud-kind", "rpc")
         .header("x-rucloud-token", &target.token)
         .body(body);

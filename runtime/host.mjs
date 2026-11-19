@@ -24,7 +24,18 @@ const spec = JSON.parse(process.env.RUCLOUD_SPEC);
 // token 只留在這個模組裡，Worker 程式碼從 process.env 拿不到
 delete process.env.RUCLOUD_SPEC;
 delete process.env.RUCLOUD_INSTANCE;
-const B = spec.bindingsUrl;
+const SOCKET = process.env.RUCLOUD_SOCKET;
+delete process.env.RUCLOUD_SOCKET;
+// 綁定 API 在 rucloud 的 Unix socket 上。fetch 連不了 Unix socket，所以在程序裡開一個本機的轉送：
+// 連到它的連線原樣接到 bindings.sock（之後 Worker 在自己的 network namespace 裡時，這個埠只有自己連得到）
+const bindingsForwarder = net.createServer((c) => {
+  const up = net.connect(spec.bindingsSocket);
+  c.on('error', () => up.destroy());
+  up.on('error', () => c.destroy());
+  c.pipe(up).pipe(c);
+});
+await new Promise((resolve) => bindingsForwarder.listen(0, '127.0.0.1', resolve));
+const B = `http://127.0.0.1:${bindingsForwarder.address().port}${spec.bindingsPath}`;
 const AUTH = { 'x-rucloud-token': spec.token };
 const nativeFetch = globalThis.fetch;
 const enc = encodeURIComponent;
@@ -1871,8 +1882,9 @@ server.on('upgrade', (req, socket, head) => {
   handleUpgrade(req, socket, head).catch((e) => { console.error(e?.stack || e); socket.destroy(); });
 });
 
-server.listen(0, '127.0.0.1', () => {
-  process.stdout.write(`RUCLOUD_READY ${server.address().port}\n`);
+// rucloud 經過 Unix socket 送請求進來
+server.listen(SOCKET, () => {
+  process.stdout.write('RUCLOUD_READY\n');
 });
 
 // rucloud 結束時 stdin 會關閉，跟著結束

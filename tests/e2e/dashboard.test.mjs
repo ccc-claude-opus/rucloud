@@ -23,7 +23,13 @@ test('管理介面與 /stats、/queues', async () => {
     await fetch(`http://127.0.0.1:${port}/api/d1`);
     await fetch(`http://127.0.0.1:${port}/api/queue`);
     await fetch(`http://127.0.0.1:${port}/`);
-    const { body } = await json(A('/stats'), auth);
+    // 第二個 Worker 程序可能還在啟動（機器忙的時候）
+    let body;
+    for (let i = 0; i < 50; i++) {
+      ({ body } = await json(A('/stats'), auth));
+      if (body.apps.find((a) => a.name === 'showcase').workers.ready === 2) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
     assert.equal(body.token_required, true);
     assert.match(body.version, /^\d+\.\d+\.\d+$/);
     const sc = body.apps.find((a) => a.name === 'showcase');

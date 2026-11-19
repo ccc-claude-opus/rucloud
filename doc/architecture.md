@@ -14,8 +14,8 @@ rucloud 把 Cloudflare Workers 平台拆成兩半：
 | `src/server.rs` | 啟動所有元件；cron、DO 鬧鐘、KV 過期清理、檔案變動重載 |
 | `src/gateway.rs` | 邊緣閘道：靜態檔案優先、轉發到 Worker、Host 分派 |
 | `src/assets.rs` | Static Assets：路徑比對、`run_worker_first`、SPA / 404、記憶體快取、ETag |
-| `src/pool.rs` | Worker 程序池：啟動、`RUCLOUD_READY` 握手、輪流分派、崩潰重開 |
-| `src/bindings.rs` | 綁定 API（`127.0.0.1`，token 驗證） |
+| `src/pool.rs` | Worker 程序池：啟動、`RUCLOUD_READY` 握手、輪流分派、崩潰重開；每個程序聽自己的 Unix socket |
+| `src/bindings.rs` | 綁定 API（Unix socket，token 驗證） |
 | `src/d1.rs` `kv.rs` `r2.rs` `durable.rs` `vectorize.rs` `queues.rs` | 各產品的儲存（SQLite + 檔案） |
 | `src/ai.rs` / `src/ai_gateway.rs` | Workers AI 綁定 / AI Gateway |
 | `runtime/host.mjs` | Node 端：載入 Worker、建 `env`、HTTP 伺服器、DO 實例、queue/scheduled 事件 |
@@ -47,7 +47,7 @@ sequenceDiagram
 ```
 
 * 閘道把外來請求裡的 `x-rucloud-*` 標頭全部拿掉，`/__rucloud*` 路徑一律 404，外部無法偽造內部事件。
-* 綁定 API 只聽 `127.0.0.1` 的隨機埠，每次啟動產生新的 token。
+* rucloud 與 Worker 程序之間都走 Unix socket（`$TMPDIR/rucloud-<pid>/`，只有 rucloud 的使用者讀得到）：閘道轉給 Worker 的請求走 Worker 的 `w<編號>-<i>.sock`，Worker 呼叫綁定 API 走 `bindings.sock`（Worker 程序裡有一個本機轉送，讓 `fetch` 能用；token 每次啟動重新產生）。不再有本機任何程式都連得到的 TCP 埠。之後放進 network namespace 的 Worker 也只靠這些 socket 和外面溝通。
 
 ## 3. 為什麼這樣分
 

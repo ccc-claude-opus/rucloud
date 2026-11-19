@@ -60,8 +60,14 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     check_state_format(&state_root)?;
     let host_js = write_runtime(&state_root)?;
 
-    let bind_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let bindings_url = format!("http://{}", bind_listener.local_addr()?);
+    // rucloud 與 Worker 程序之間的 Unix socket（不是本機任何程式都連得到的 TCP 埠）。
+    // 路徑要短：macOS 的 Unix socket 路徑上限是 104 bytes
+    let sock_dir = std::env::temp_dir().join(format!("rucloud-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&sock_dir);
+    std::fs::create_dir_all(&sock_dir)?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&sock_dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+    let bind_listener = tokio::net::UnixListener::bind(sock_dir.join("bindings.sock"))?;
     let http = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
@@ -121,7 +127,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
         state_root: state_root.clone(),
         node: cfg.node.clone(),
         host_js: host_js.clone(),
-        bindings_url: bindings_url.clone(),
+        sock_dir: sock_dir.clone(),
         http,
         dev,
         granted: Arc::new(granted),
@@ -349,6 +355,7 @@ pub async fn run(cfg: ServeConfig, dev: bool) -> Result<()> {
     }
     // 讓 Worker 程序有時間收到 kill
     tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = std::fs::remove_dir_all(&sock_dir);
     tracing::info!("已結束");
     Ok(())
 }

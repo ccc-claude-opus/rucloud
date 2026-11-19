@@ -7,7 +7,7 @@ use axum::extract::Request;
 use axum::http::{HeaderMap, Response, StatusCode, header};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::UnixStream;
 
 const MAX_HEAD: usize = 64 * 1024;
 
@@ -18,10 +18,10 @@ pub fn is_upgrade(headers: &HeaderMap) -> bool {
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
-/// 把 upgrade 請求轉給 127.0.0.1:port。headers 是已經整理好（含內部標頭）的請求標頭。
+/// 把 upgrade 請求轉給 Worker 程序的 Unix socket。headers 是已經整理好（含內部標頭）的請求標頭。
 pub async fn tunnel(
     mut req: Request,
-    port: u16,
+    sock: &std::path::Path,
     path: &str,
     headers: &HeaderMap,
     gauge: Option<std::sync::Arc<crate::observe::Metrics>>,
@@ -30,7 +30,7 @@ pub async fn tunnel(
     let on_upgrade = hyper::upgrade::on(&mut req);
 
     let mut head = format!(
-        "{} {path} HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\nconnection: Upgrade\r\n",
+        "{} {path} HTTP/1.1\r\nhost: worker\r\nconnection: Upgrade\r\n",
         req.method()
     );
     if let Some(u) = upgrade.as_ref().and_then(|u| u.to_str().ok()) {
@@ -49,8 +49,7 @@ pub async fn tunnel(
     }
     head.push_str("\r\n");
 
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).await.context("連不到 Worker 程序")?;
-    stream.set_nodelay(true)?;
+    let mut stream = UnixStream::connect(sock).await.context("連不到 Worker 程序")?;
     stream.write_all(head.as_bytes()).await?;
 
     // 讀回應標頭

@@ -2,6 +2,7 @@
 
 ## 未發佈
 
+* rucloud 與 Worker 程序之間改用 Unix socket（閘道 → Worker、Worker → 綁定 API、WebSocket 轉接），不再用 `127.0.0.1` 的 TCP 埠；為之後把 Worker 放進作業系統層級的隔離（network namespace）做準備。
 * **Workers AI 的設定與用量**：後端可以在 `[ai]` 或管理 API 的 `/ai` 設定（`base_url`、`api_key`、`model`、`embedding_model`），每個應用每天的請求數與 token 數記下來（`GET /ai/usage`），可以設每天的上限（`daily_requests`、`daily_tokens`）；環境變數 `RUCLOUD_AI_*` 仍然可以用。`[install]` 的應用給 `ai` 權限後可以用 `env.AI`。修正：沒有 AI 綁定的應用也能直接呼叫綁定 API 的 `/ai/run`。
 * **Images**（`env.IMAGES`）：`info`、`input().transform().draw().output()`，縮放（各種 `fit`、`gravity`）、旋轉、翻轉、模糊、亮度、對比、疊圖，輸出 JPEG、PNG、WebP（無損）、GIF；用 Rust 的 image crate 在 rucloud 裡做。不能輸出 AVIF。
 * **寄信**（`send_email` 綁定，`cloudflare:email` 的 `EmailMessage`，也接受 `{ from, to, subject, text, html }`）：透過設定的 SMTP 伺服器寄出，只能寄給驗證過的收件地址；`destination_address`、`allowed_destination_addresses`、`allowed_sender_addresses` 照 Cloudflare 的規則。設定在 `[email]` 或管理 API 的 `/email`（`PUT`、`DELETE`、`POST /email/test`；不回傳密碼）。
